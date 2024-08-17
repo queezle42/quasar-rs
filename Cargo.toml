@@ -1,0 +1,13 @@
+[workspace]
+resolver = "2"
+members = [
+  "examples",
+  "quasar-observable",
+]
+
+[workspace.package]
+version = "0.0.0"
+edition = "2021"
+
+[workspace.metadata.crane]
+name = "quasar"

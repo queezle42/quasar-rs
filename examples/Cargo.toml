@@ -1,0 +1,13 @@
+[package]
+name = "examples"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[dependencies]
+quasar-observable = { path = "../quasar-observable" }
+
+[[example]]
+name = "example"
+path = "example.rs"
+required-features = []

@@ -1,0 +1,25 @@
+name: "CI"
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  check:
+    name: "Check for errors"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: DeterminateSystems/nix-installer-action@v4
+      - uses: DeterminateSystems/magic-nix-cache-action@v2
+      - run: nix develop -L -c cargo check --all-targets
+
+  code-style:
+    name: "Check code style"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: DeterminateSystems/nix-installer-action@v4
+      - uses: DeterminateSystems/magic-nix-cache-action@v2
+      - name: "Code style check (rustfmt)"
+        run: nix develop -L -c cargo fmt --check
