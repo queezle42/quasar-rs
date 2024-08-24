@@ -2,84 +2,101 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
 
+    flake-utils.url = "github:numtide/flake-utils";
+
     crane = {
       url = "github:ipetkov/crane";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+
+    rust-overlay = {
+      url = "github:oxalica/rust-overlay";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
-  outputs = { self, nixpkgs, crane }:
-  let
-    lib = nixpkgs.lib;
-    systems = lib.platforms.unix;
-    forAllSystems = lib.genAttrs systems;
-  in {
-    packages = forAllSystems (system:
-      let
-        pkgs = import nixpkgs { inherit system; };
+  outputs = {
+    self,
+    nixpkgs,
+    flake-utils,
+    crane,
+    rust-overlay,
+  }:
+    flake-utils.lib.eachDefaultSystem (system: let
+      pkgs = import nixpkgs {
+        inherit system;
+        overlays = [(import rust-overlay)];
+      };
 
-        craneLib = crane.mkLib pkgs;
+      craneLib = (crane.mkLib pkgs).overrideToolchain (p: p.rust-bin.nightly.latest.default.override {
+        extensions = [ "rust-analyzer" "rust-src" ];
+      });
 
-        xmlFilter = path: _type: builtins.match ".*\.xml" path != null;
+      src = craneLib.cleanCargoSource ./.;
 
-        src = craneLib.cleanCargoSource ./.;
+      commonArgs = {
+        inherit src;
+        strictDeps = true;
+      };
 
-        commonArgs = {
-          inherit src;
-          strictDeps = true;
-        };
+      # Build *just* the cargo dependencies so they can be cached.
+      # Check again later if we might want to use cargo-hakari to ensure
+      # dependencies are compiled with the correct configuration.
+      cargoArtifacts = craneLib.buildDepsOnly commonArgs;
 
-        # Build *just* the cargo dependencies so they can be cached.
-        # Check again later if we might want to use cargo-hakari to ensure
-        # dependencies are compiled with the correct configuration.
-        cargoArtifacts = craneLib.buildDepsOnly commonArgs;
-
-        crateArgs = commonArgs // {
+      crateArgs =
+        commonArgs
+        // {
           inherit cargoArtifacts;
         };
 
-        singlePackage = crateSrc: craneLib.buildPackage (crateArgs // rec {
-          inherit (craneLib.crateNameFromCargoToml { cargoToml = "${crateSrc}/Cargo.toml"; }) pname;
-          cargoExtraArgs = "--package ${pname}";
-        });
+      singlePackage = crateSrc:
+        craneLib.buildPackage (crateArgs
+          // rec {
+            inherit (craneLib.crateNameFromCargoToml {cargoToml = "${crateSrc}/Cargo.toml";}) pname;
+            cargoExtraArgs = "--package ${pname}";
+          });
 
-      in {
+      watch = pkgs.writeScriptBin "watch" ''
+        cargo watch --clear --delay .1 -x 'check --workspace --all-targets'
+      '';
+    in {
+      packages = {
         # Default builds the whole workspace and adds all binaries to the result
         default = craneLib.buildPackage crateArgs;
 
         # Partial builds
         quasar-observable = singlePackage ./quasar-observable;
 
-        checkFormat = craneLib.cargoFmt { inherit src; };
+        checkFormat = craneLib.cargoFmt {inherit src;};
 
         doc = craneLib.cargoDoc crateArgs;
 
-        examples = craneLib.buildPackage (crateArgs // {
-          pname = "quasar-examples";
-          cargoExtraArgs = "--examples";
-        });
-      }
-    );
+        examples = craneLib.buildPackage (crateArgs
+          // {
+            pname = "quasar-examples";
+            cargoExtraArgs = "--examples";
+          });
+      };
 
-    checks = forAllSystems (system: {
-      build = self.packages.${system}.default;
-      examples = self.packages.${system}.examples;
-      format = self.packages.${system}.checkFormat;
+      checks = {
+        build = self.packages.${system}.default;
+        examples = self.packages.${system}.examples;
+        format = self.packages.${system}.checkFormat;
+      };
+
+      devShells.default = craneLib.devShell {
+        # Inherit inputs from checks.
+        checks = self.checks.${system};
+
+        # Additional dev-shell environment variables can be set directly
+        # MY_CUSTOM_DEVELOPMENT_VAR = "something else";
+
+        # Extra inputs can be added here; cargo and rustc are provided by default.
+        packages = [
+          pkgs.cargo-watch
+          watch
+        ];
+      };
     });
-
-    devShells = forAllSystems (system:
-      let
-        pkgs = import nixpkgs { inherit system; };
-      in {
-        default = pkgs.mkShell {
-          packages = [
-            pkgs.cargo
-            pkgs.cargo-watch
-            pkgs.rust-analyzer
-            pkgs.rustfmt
-          ];
-        };
-      }
-    );
-  };
 }
