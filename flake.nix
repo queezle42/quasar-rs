@@ -58,7 +58,7 @@
           });
 
       watch = pkgs.writeScriptBin "watch" ''
-        cargo watch --clear --delay .1 -x 'check --workspace --all-targets'
+        cargo watch --clear --delay .1 -x 'clippy --workspace --all-targets' -x 'nextest run --workspace --all-targets' -x 'test --doc --workspace'
       '';
     in {
       packages = {
@@ -95,6 +95,7 @@
         # Extra inputs can be added here; cargo and rustc are provided by default.
         packages = [
           pkgs.cargo-watch
+          pkgs.cargo-nextest
           watch
         ];
       };
