@@ -1,3 +1,5 @@
+#![feature(trait_upcasting)]
+
 use std::any::Any;
 use std::boxed::Box;
 use std::collections::BTreeMap;
@@ -10,29 +12,29 @@ use std::sync::Arc;
 pub trait Observable
 where
     Self: Sized + 'static,
-    Self::T: Send,
-    Self::E: Send,
 {
-    type T;
-    type E;
+    type T: Send;
+    type E: Send;
+
+    #[must_use]
     fn attach<P: Observer<Self::T, Self::E> + 'static>(
         self,
         observer: P,
     ) -> impl FnOnce() -> (Self, P) + Send;
 
     fn retrieve(self) -> impl Future<Output = Result<Self::T, Self::E>> + Send {
-        retrieve::retrieve(self)
+        self::retrieve::retrieve(self)
     }
 
     fn share(self) -> share::Share<Self> {
         share::Share::new(self)
     }
 
-    fn map<F>(self, f: F) -> map::Map<Self, F>
+    fn map<F>(self, f: F) -> self::map::Map<Self, F>
     where
         F: FnMut(Self::T) -> Self::T,
     {
-        map::Map::new(self, f)
+        self::map::Map::new(self, f)
     }
 }
 
@@ -44,36 +46,34 @@ pub trait Container {
     fn merge_updates(current: Self::Update, next: Self::Update);
 }
 
-pub trait ObservableContainer: Observable
+pub trait ContainerObservable: Observable
 where
     Self::T: Container,
 {
-    fn attach(self, observer: impl ContainerObserver<Self::T, Self::E>) -> AttachedObserver;
+    fn attach_container<P: ContainerObserver<Self::T, Self::E> + 'static>(
+        self,
+        observer: P,
+    ) -> impl FnOnce() -> (Self, P) + Send;
 }
 
 pub trait Observer<T, E>: Any + Send {
-    fn set_waiting(&mut self, clear_cache: bool);
+    fn set_changing(&mut self, clear_cache: bool);
     fn set_live(&mut self, content: Option<Result<T, E>>) -> Box<dyn Future<Output = ()> + Sync>;
-    fn downcast_foo<P>(self: Box<Self>) -> Box<P> {
-        todo!()
-    }
 }
 
 pub trait ContainerObserver<T, E>: Observer<T, E>
 where
     T: Container,
 {
-    fn update(&mut self, update: <T as Container>::Update);
+    fn update(&mut self, update: <T as Container>::Update) -> Box<dyn Future<Output = ()> + Sync>;
 }
 
 pub struct AttachedObserver(Option<Box<dyn FnOnce() + Sync + Send>>);
 impl Drop for AttachedObserver {
     fn drop(&mut self) {
         let AttachedObserver(state) = self;
-        let old_state = std::mem::replace(state, None);
-        match old_state {
-            Some(detach) => detach(),
-            None => (),
+        if let Some(detach) = std::mem::take(state) {
+            detach();
         }
     }
 }
@@ -148,8 +148,8 @@ mod retrieve {
     where
         O: Observable,
     {
-        fn set_waiting(&mut self, clear_cache: bool) {
-            let opt = std::mem::replace(&mut self.state, None);
+        fn set_changing(&mut self, clear_cache: bool) {
+            let opt = std::mem::take(&mut self.state);
             match opt {
                 None => (),
                 Some(obs) => match obs.set_waiting(clear_cache) {
@@ -163,17 +163,14 @@ mod retrieve {
             &mut self,
             content: Option<Result<O::T, O::E>>,
         ) -> Box<dyn Future<Output = ()> + Sync> {
-            let opt = std::mem::replace(&mut self.state, None);
+            let opt = std::mem::take(&mut self.state);
             match opt {
                 None => (),
                 Some(obs) => match obs.set_live(content) {
                     ObserverState::Live(content) => {
-                        let tx = std::mem::replace(&mut self.tx, None);
-                        match tx {
-                            Some(tx) => {
-                                let _ = tx.send(content);
-                            }
-                            None => (),
+                        let tx = std::mem::take(&mut self.tx);
+                        if let Some(tx) = tx {
+                            let _ = tx.send(content);
                         }
                     }
                     other => self.state = Some(other),
@@ -255,8 +252,8 @@ mod map {
         T: Send + 'static,
         E: Send + 'static,
     {
-        fn set_waiting(&mut self, clear_cache: bool) {
-            self.next.set_waiting(clear_cache)
+        fn set_changing(&mut self, clear_cache: bool) {
+            self.next.set_changing(clear_cache)
         }
         fn set_live(
             &mut self,
@@ -348,7 +345,7 @@ mod share {
             let observer_id = match &mut *state {
                 State::Detached(observable) => {
                     // attach can only happen once so unwrap is ok
-                    let observable = std::mem::replace(observable, None).unwrap();
+                    let observable = std::mem::take(observable).unwrap();
                     let mut observers: BTreeMap<u64, Box<dyn Observer<O::T, O::E>>> =
                         BTreeMap::new();
                     observers.insert(0, Box::new(observer));
@@ -366,7 +363,7 @@ mod share {
                     attached.next_observer_id += 1;
                     match &attached.observer_state {
                         ObserverState::Waiting(None) => todo!("do we need to propagate waiting on subscribe? (missing changing/waiting decision)"),
-                        ObserverState::Waiting(Some(cache)) => todo!("store cache for observer"),
+                        ObserverState::Waiting(Some(_cache)) => todo!("store cache for observer"),
                         ObserverState::Live(content) => {
                             let _ = observer.set_live(Some(content.clone()));
                         }
@@ -380,16 +377,28 @@ mod share {
             move || {
                 let mut state = self.state.lock().unwrap();
 
-                match &mut *state {
-                    State::Detached(observable) => unreachable!(),
+                let observer = match &mut *state {
+                    State::Detached(_observable) => unreachable!(),
                     State::Attached(attached) => {
                         let observer_box = attached.observers.remove(&observer_id).unwrap();
-                        let observer_box = observer_box.downcast_foo::<P>();
+                        let observer_box = (observer_box as Box<dyn Any>).downcast::<P>().unwrap();
+                        let observer = *observer_box;
+                        if attached.observers.is_empty() {
+                            if let State::Attached(attached) =
+                                std::mem::replace(&mut *state, State::Detached(None))
+                            {
+                                let (observable, _) = (attached.detach_fn)();
+                                *state = State::Detached(Some(observable));
+                            } else {
+                                unreachable!()
+                            }
+                        }
+                        observer
                     }
                 };
+                drop(state);
 
-                todo!();
-                (self, todo!())
+                (self, observer)
             }
         }
     }
@@ -402,10 +411,13 @@ mod share {
     where
         O: Observable + Send,
     {
-        fn set_waiting(&mut self, clear_cache: bool) {}
+        fn set_changing(&mut self, _clear_cache: bool) {
+            let _ = self.0;
+            todo!()
+        }
         fn set_live(
             &mut self,
-            content: Option<Result<O::T, O::E>>,
+            _content: Option<Result<O::T, O::E>>,
         ) -> Box<dyn Future<Output = ()> + Sync> {
             todo!()
         }
