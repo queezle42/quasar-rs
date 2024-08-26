@@ -33,9 +33,9 @@ where
         share::Share::new(self)
     }
 
-    fn map<F>(self, f: F) -> self::map::Map<Self, F>
+    fn map<F, A>(self, f: F) -> self::map::Map<Self, F, A>
     where
-        F: FnMut(Self::T) -> Self::T,
+        F: FnMut(Self::T) -> A,
     {
         self::map::Map::new(self, f)
     }
@@ -219,34 +219,35 @@ mod retrieve {
 mod map {
     use super::*;
 
-    pub struct Map<O, F>
+    pub struct Map<O, F, A>
     where
         O: Observable,
-        F: FnMut(O::T) -> O::T,
+        F: FnMut(O::T) -> A,
     {
         observable: O,
         f: F,
     }
 
-    impl<O, F> Map<O, F>
+    impl<O, A, F> Map<O, F, A>
     where
         O: Observable,
-        F: FnMut(O::T) -> O::T,
+        F: FnMut(O::T) -> A,
     {
-        pub fn new(observable: O, f: F) -> Map<O, F> {
+        pub fn new(observable: O, f: F) -> Map<O, F, A> {
             Map { observable, f }
         }
     }
 
-    impl<O, F> Observable for Map<O, F>
+    impl<O, F, A> Observable for Map<O, F, A>
     where
+        A: Send + 'static,
         O: Observable,
-        F: FnMut(O::T) -> O::T + Send + 'static,
+        F: FnMut(O::T) -> A + Send + 'static,
     {
-        type T = O::T;
+        type T = A;
         type E = O::E;
         type W = O::W;
-        fn attach<P: Observer<O::T, O::E, O::W> + 'static>(
+        fn attach<P: Observer<A, O::E, O::W> + 'static>(
             self,
             observer: P,
         ) -> impl FnOnce() -> (Self, P) + Send {
@@ -271,20 +272,21 @@ mod map {
         }
     }
 
-    pub struct MapObserver<T, E, W, P, F>
+    pub struct MapObserver<T, E, W, P, F, A>
     where
-        P: Observer<T, E, W>,
-        F: FnMut(T) -> T,
+        P: Observer<A, E, W>,
+        F: FnMut(T) -> A,
     {
         next: P,
         f: F,
         phantom: PhantomData<(T, E, W)>,
     }
 
-    impl<T, E, W, P, F> Observer<T, E, W> for MapObserver<T, E, W, P, F>
+    impl<T, A, E, W, P, F> Observer<T, E, W> for MapObserver<T, E, W, P, F, A>
     where
-        P: Observer<T, E, W>,
-        F: FnMut(T) -> T + Send + 'static,
+        P: Observer<A, E, W>,
+        F: FnMut(T) -> A + Send + 'static,
+        A: Send + 'static,
         T: Send + 'static,
         E: Send + 'static,
         W: Send + 'static,
