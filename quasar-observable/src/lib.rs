@@ -1,3 +1,5 @@
+#![feature(associated_type_defaults)]
+#![feature(never_type)]
 #![feature(trait_upcasting)]
 
 use std::any::Any;
@@ -15,9 +17,10 @@ where
 {
     type T: Send;
     type E: Send;
+    type W: Send = !;
 
     #[must_use]
-    fn attach<P: Observer<Self::T, Self::E> + 'static>(
+    fn attach<P: Observer<Self::T, Self::E, Self::W> + 'static>(
         self,
         observer: P,
     ) -> impl FnOnce() -> (Self, P) + Send;
@@ -50,18 +53,19 @@ pub trait ContainerObservable: Observable
 where
     Self::T: Container,
 {
-    fn attach_container<P: ContainerObserver<Self::T, Self::E> + 'static>(
+    fn attach_container<P: ContainerObserver<Self::T, Self::E, Self::W> + 'static>(
         self,
         observer: P,
     ) -> impl FnOnce() -> (Self, P) + Send;
 }
 
-pub trait Observer<T, E>: Any + Send {
+pub trait Observer<T, E, W>: Any + Send {
     fn set_changing(&mut self, clear_cache: bool);
+    fn set_waiting(&mut self, clear_cache: bool, marker: W);
     fn set_live(&mut self, content: Option<Result<T, E>>) -> Box<dyn Future<Output = ()> + Sync>;
 }
 
-pub trait ContainerObserver<T, E>: Observer<T, E>
+pub trait ContainerObserver<T, E, W>: Observer<T, E, W>
 where
     T: Container,
 {
@@ -78,29 +82,49 @@ impl Drop for AttachedObserver {
     }
 }
 
-enum ObserverState<T, E> {
-    Waiting(Option<Result<T, E>>),
+enum ObserverState<T, E, W> {
+    Changing(Option<Result<T, E>>),
+    Waiting(Option<Result<T, E>>, W),
     Live(Result<T, E>),
 }
 
-impl<T, E> ObserverState<T, E> {
-    fn set_waiting(self, clear_cache: bool) -> ObserverState<T, E> {
+impl<T, E, W> ObserverState<T, E, W> {
+    fn new() -> ObserverState<T, E, W> {
+        ObserverState::Changing(None)
+    }
+
+    fn set_changing(self, clear_cache: bool) -> ObserverState<T, E, W> {
         if clear_cache {
-            ObserverState::Waiting(None)
+            ObserverState::Changing(None)
         } else {
             match self {
-                ObserverState::Waiting(cache) => ObserverState::Waiting(cache),
-                ObserverState::Live(content) => ObserverState::Waiting(Some(content)),
+                ObserverState::Changing(cache) => ObserverState::Changing(cache),
+                ObserverState::Waiting(cache, _marker) => ObserverState::Changing(cache),
+                ObserverState::Live(content) => ObserverState::Changing(Some(content)),
             }
         }
     }
 
-    fn set_live(self, content: Option<Result<T, E>>) -> ObserverState<T, E> {
+    fn set_waiting(self, clear_cache: bool, marker: W) -> ObserverState<T, E, W> {
+        if clear_cache {
+            ObserverState::Waiting(None, marker)
+        } else {
+            match self {
+                ObserverState::Changing(cache) => ObserverState::Waiting(cache, marker),
+                ObserverState::Waiting(cache, _marker) => ObserverState::Waiting(cache, marker),
+                ObserverState::Live(content) => ObserverState::Waiting(Some(content), marker),
+            }
+        }
+    }
+
+    fn set_live(self, content: Option<Result<T, E>>) -> ObserverState<T, E, W> {
         match content {
             Some(content) => ObserverState::Live(content),
             None => match self {
-                ObserverState::Waiting(None) => panic!(),
-                ObserverState::Waiting(Some(cache)) => ObserverState::Live(cache),
+                ObserverState::Changing(None) => panic!(),
+                ObserverState::Changing(Some(cache)) => ObserverState::Live(cache),
+                ObserverState::Waiting(None, _) => panic!(),
+                ObserverState::Waiting(Some(cache), _) => ObserverState::Live(cache),
                 ObserverState::Live(content) => ObserverState::Live(content),
             },
         }
@@ -114,7 +138,7 @@ mod retrieve {
     where
         O: Observable,
     {
-        state: Option<ObserverState<O::T, O::E>>,
+        state: Option<ObserverState<O::T, O::E, O::W>>,
         tx: Option<tokio::sync::oneshot::Sender<Result<O::T, O::E>>>,
     }
 
@@ -124,7 +148,7 @@ mod retrieve {
     {
         let (tx, rx) = tokio::sync::oneshot::channel();
         let retrieve = Retrieve::<O> {
-            state: Some(ObserverState::Waiting(None)),
+            state: Some(ObserverState::new()),
             tx: Some(tx),
         };
         let attached = observable.attach(retrieve);
@@ -144,7 +168,7 @@ mod retrieve {
         }
     }
 
-    impl<O> Observer<O::T, O::E> for Retrieve<O>
+    impl<O> Observer<O::T, O::E, O::W> for Retrieve<O>
     where
         O: Observable,
     {
@@ -152,7 +176,18 @@ mod retrieve {
             let opt = std::mem::take(&mut self.state);
             match opt {
                 None => (),
-                Some(obs) => match obs.set_waiting(clear_cache) {
+                Some(obs) => match obs.set_changing(clear_cache) {
+                    ObserverState::Live(_content) => unreachable!(),
+                    other => self.state = Some(other),
+                },
+            }
+        }
+
+        fn set_waiting(&mut self, clear_cache: bool, marker: O::W) {
+            let opt = std::mem::take(&mut self.state);
+            match opt {
+                None => (),
+                Some(obs) => match obs.set_waiting(clear_cache, marker) {
                     ObserverState::Live(_content) => unreachable!(),
                     other => self.state = Some(other),
                 },
@@ -210,7 +245,8 @@ mod map {
     {
         type T = O::T;
         type E = O::E;
-        fn attach<P: Observer<O::T, O::E> + 'static>(
+        type W = O::W;
+        fn attach<P: Observer<O::T, O::E, O::W> + 'static>(
             self,
             observer: P,
         ) -> impl FnOnce() -> (Self, P) + Send {
@@ -235,25 +271,29 @@ mod map {
         }
     }
 
-    pub struct MapObserver<T, E, P, F>
+    pub struct MapObserver<T, E, W, P, F>
     where
-        P: Observer<T, E>,
+        P: Observer<T, E, W>,
         F: FnMut(T) -> T,
     {
         next: P,
         f: F,
-        phantom: PhantomData<(T, E)>,
+        phantom: PhantomData<(T, E, W)>,
     }
 
-    impl<T, E, P, F> Observer<T, E> for MapObserver<T, E, P, F>
+    impl<T, E, W, P, F> Observer<T, E, W> for MapObserver<T, E, W, P, F>
     where
-        P: Observer<T, E>,
+        P: Observer<T, E, W>,
         F: FnMut(T) -> T + Send + 'static,
         T: Send + 'static,
         E: Send + 'static,
+        W: Send + 'static,
     {
         fn set_changing(&mut self, clear_cache: bool) {
             self.next.set_changing(clear_cache)
+        }
+        fn set_waiting(&mut self, clear_cache: bool, marker: W) {
+            self.next.set_waiting(clear_cache, marker)
         }
         fn set_live(
             &mut self,
@@ -313,8 +353,8 @@ mod share {
     struct AttachedState<O: Observable> {
         detach_fn: Box<dyn FnOnce() -> (O, ShareObserver<O>) + Send>,
         next_observer_id: u64,
-        observers: BTreeMap<u64, Box<dyn Observer<O::T, O::E>>>,
-        observer_state: ObserverState<O::T, O::E>,
+        observers: BTreeMap<u64, Box<dyn Observer<O::T, O::E, O::W>>>,
+        observer_state: ObserverState<O::T, O::E, O::W>,
     }
 
     impl<O> Share<O>
@@ -336,7 +376,8 @@ mod share {
     {
         type T = O::T;
         type E = O::E;
-        fn attach<P: Observer<O::T, O::E> + 'static>(
+        type W = O::W;
+        fn attach<P: Observer<O::T, O::E, O::W> + 'static>(
             self,
             observer: P,
         ) -> impl FnOnce() -> (Self, P) + Send {
@@ -346,7 +387,7 @@ mod share {
                 State::Detached(observable) => {
                     // attach can only happen once so unwrap is ok
                     let observable = std::mem::take(observable).unwrap();
-                    let mut observers: BTreeMap<u64, Box<dyn Observer<O::T, O::E>>> =
+                    let mut observers: BTreeMap<u64, Box<dyn Observer<O::T, O::E, O::W>>> =
                         BTreeMap::new();
                     observers.insert(0, Box::new(observer));
                     let detach_fn = observable.attach(ShareObserver(self.clone()));
@@ -354,7 +395,7 @@ mod share {
                         detach_fn: Box::new(detach_fn),
                         next_observer_id: 1,
                         observers,
-                        observer_state: ObserverState::Waiting(None),
+                        observer_state: ObserverState::new(),
                     });
                     0
                 }
@@ -362,8 +403,16 @@ mod share {
                     let observer_id = attached.next_observer_id;
                     attached.next_observer_id += 1;
                     match &attached.observer_state {
-                        ObserverState::Waiting(None) => todo!("do we need to propagate waiting on subscribe? (missing changing/waiting decision)"),
-                        ObserverState::Waiting(Some(_cache)) => todo!("store cache for observer"),
+                        ObserverState::Changing(None) => (),
+                        ObserverState::Changing(Some(_cache)) => {
+                            todo!("store cache for subscriber")
+                        }
+                        ObserverState::Waiting(None, _marker) => {
+                            todo!("we need to propagate waiting on subscribe")
+                        }
+                        ObserverState::Waiting(Some(_cache), _marker) => {
+                            todo!("we need to propagate waiting on subscribe + store cache for subscriber")
+                        }
                         ObserverState::Live(content) => {
                             let _ = observer.set_live(Some(content.clone()));
                         }
@@ -407,11 +456,15 @@ mod share {
     where
         O: Observable;
 
-    impl<O> Observer<O::T, O::E> for ShareObserver<O>
+    impl<O> Observer<O::T, O::E, O::W> for ShareObserver<O>
     where
         O: Observable + Send,
     {
         fn set_changing(&mut self, _clear_cache: bool) {
+            let _ = self.0;
+            todo!()
+        }
+        fn set_waiting(&mut self, _clear_cache: bool, _marker: O::W) {
             let _ = self.0;
             todo!()
         }
