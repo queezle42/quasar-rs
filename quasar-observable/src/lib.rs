@@ -37,16 +37,12 @@ where
         share::Share::new(self)
     }
 
-    // fn eval(self) -> impl Observable<I = T<Self>, E = Self::E, W = Self::W, Puc = ()> {
-    //     todo!()
-    // }
-
-    // fn map<F, A>(self, f: F) -> self::map::Map<Self, F, A>
-    // where
-    //     F: FnMut(T<Self>) -> A,
-    // {
-    //     self::map::Map::new(self, f)
-    // }
+    fn map<F, A>(self, f: F) -> self::map::Map<Self, F, A>
+    where
+        F: FnMut(T<Self>) -> A,
+    {
+        self::map::Map::new(self, f)
+    }
 
     fn map_items<F, A>(self, f: F) -> self::map_items::MapItems<Self, F, A>
     where
@@ -54,6 +50,15 @@ where
     {
         self::map_items::MapItems::new(self, f)
     }
+}
+
+pub fn attach_eval_observer<O, R>(observable: O, observer: R) -> impl FnOnce() -> (O, R) + Send
+where
+    O: Observable,
+    T<O>: Send,
+    R: Observer<T<O>, O::E, O::W, !> + 'static,
+{
+    O::Puc::attach_eval_observer(observable, observer)
 }
 
 pub trait Puc {
@@ -70,6 +75,21 @@ pub trait Puc {
     fn map_update<F, I, A>(update: Self::Update<I>, f: F) -> Self::Update<A>
     where
         F: FnMut(Self::Update<I>) -> Self::Update<A>;
+
+    fn eval_observable<O>(observable: O) -> impl Observable<Puc = ()>
+    where
+        O: Observable<Puc = Self>,
+        T<O>: Send,
+    {
+        self::eval::Eval(observable)
+    }
+
+    #[must_use]
+    fn attach_eval_observer<O, R>(observable: O, observer: R) -> impl FnOnce() -> (O, R) + Send
+    where
+        O: Observable,
+        T<O>: Send,
+        R: Observer<T<O>, O::E, O::W, !> + 'static;
 }
 
 impl Puc for () {
@@ -95,6 +115,24 @@ impl Puc for () {
     }
     fn map_update<F, I, A>(update: !, _f: F) -> Self::Update<A> {
         match update {}
+    }
+
+    #[allow(refining_impl_trait)]
+    fn eval_observable<O>(observable: O) -> O {
+        observable
+    }
+
+    fn attach_eval_observer<O, R>(observable: O, observer: R) -> impl FnOnce() -> (O, R) + Send
+    where
+        O: Observable,
+        T<O>: Send,
+        R: Observer<T<O>, O::E, O::W, !> + 'static,
+    {
+        let detach = observable.attach(self::eval::EvalObserver::<O, R>::new(observer));
+        || {
+            let (observable, eval_observer) = detach();
+            (observable, eval_observer.observer)
+        }
     }
 }
 
@@ -186,6 +224,87 @@ where
             ObserverState::Waiting(None, _) => None,
             ObserverState::Waiting(Some(cache), _) => Some(cache),
             ObserverState::Live(content) => Some(content),
+        }
+    }
+}
+
+mod eval {
+    use super::*;
+
+    pub struct Eval<O>(pub O)
+    where
+        O: Observable,
+        T<O>: Send;
+
+    impl<O> Observable for Eval<O>
+    where
+        O: Observable,
+        T<O>: Send,
+    {
+        type I = T<O>;
+        type E = O::E;
+        type W = O::W;
+        type Puc = ();
+        fn attach<P>(self, observer: P) -> impl FnOnce() -> (Self, P) + Send
+        where
+            P: Observer<T<Self>, Self::E, Self::W, U<Self>> + 'static,
+        {
+            let Eval(next) = self;
+            let detach = next.attach(EvalObserver::<O, P>::new(observer));
+            || {
+                let (next, eval_observer) = detach();
+                (Eval(next), eval_observer.observer)
+            }
+        }
+    }
+
+    pub struct EvalObserver<O, R>
+    where
+        O: Observable,
+        T<O>: Send,
+        R: Observer<T<O>, O::E, O::W, !>,
+    {
+        pub observer: R,
+        observer_state: ObserverState<O::I, O::E, O::W, O::Puc>,
+    }
+
+    impl<O, R> EvalObserver<O, R>
+    where
+        O: Observable,
+        T<O>: Send,
+        R: Observer<T<O>, O::E, O::W, !>,
+    {
+        pub fn new(observer: R) -> Self {
+            EvalObserver {
+                observer,
+                observer_state: ObserverState::new(),
+            }
+        }
+    }
+
+    impl<O, R> Observer<T<O>, O::E, O::W, U<O>> for EvalObserver<O, R>
+    where
+        O: Observable,
+        T<O>: Send,
+        R: Observer<T<O>, O::E, O::W, !>,
+    {
+        fn set_changing(&mut self, clear_cache: bool) {
+            todo!()
+        }
+
+        fn set_waiting(&mut self, clear_cache: bool, marker: O::W) {
+            todo!()
+        }
+
+        fn set_live(
+            &mut self,
+            content: Option<Result<T<O>, O::E>>,
+        ) -> Box<dyn Future<Output = ()> + Sync> {
+            todo!()
+        }
+
+        fn update(&mut self, update: U<O>) -> Box<dyn Future<Output = ()> + Sync> {
+            todo!()
         }
     }
 }
@@ -300,9 +419,9 @@ mod map {
 
     pub struct Map<O, F, A>
     where
-        O: Observable<Puc = ()>,
+        O: Observable,
         T<O>: Send,
-        F: FnMut(O::I) -> A,
+        F: FnMut(T<O>) -> A,
     {
         observable: O,
         f: F,
@@ -310,7 +429,7 @@ mod map {
 
     impl<O, A, F> Map<O, F, A>
     where
-        O: Observable<Puc = ()>,
+        O: Observable,
         T<O>: Send,
         F: FnMut(T<O>) -> A,
     {
@@ -322,9 +441,9 @@ mod map {
     impl<O, F, A> Observable for Map<O, F, A>
     where
         A: Send + 'static,
-        O: Observable<Puc = ()>,
-        //T<O>: Send,
-        F: FnMut(O::I) -> A + Send + 'static,
+        O: Observable,
+        T<O>: Send,
+        F: FnMut(T<O>) -> A + Send + 'static,
     {
         type I = A;
         type E = O::E;
@@ -334,11 +453,14 @@ mod map {
             observer: P,
         ) -> impl FnOnce() -> (Self, P) + Send {
             // attach
-            let detach = self.observable.attach(MapObserver {
-                f: self.f,
-                next: observer,
-                phantom: PhantomData,
-            });
+            let detach = attach_eval_observer(
+                self.observable,
+                MapObserver {
+                    f: self.f,
+                    next: observer,
+                    phantom: PhantomData,
+                },
+            );
             // detach fn
             || {
                 let (
