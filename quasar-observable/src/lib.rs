@@ -48,12 +48,25 @@ where
         self::map::Map::new(self, f)
     }
 
-    // fn map_items<F, A>(self, f: F) -> self::map_items::MapItems<Self, F, A>
-    // where
-    //     F: FnMut(Self::I) -> A,
-    // {
-    //     self::map_items::MapItems::new(self, f)
-    // }
+    fn map_items<F, A>(
+        self,
+        f: F,
+    ) -> impl Observable<
+        T = <Self::T as Container>::C<A>,
+        E = Self::E,
+        W = Self::W,
+        U = <Self::U as ContainerUpdate<Self::T>>::U<A>,
+    >
+    where
+        Self::T: Container,
+        Self::U: ContainerUpdate<Self::T>,
+        F: FnMut(<Self::T as Container>::I) -> A + Send + Clone + 'static,
+        A: Send + Clone + 'static,
+        <Self::T as Container>::C<A>: Send + Clone,
+        <Self::U as ContainerUpdate<Self::T>>::U<A>: Send + Clone,
+    {
+        self::map_items::MapItems(self, f)
+    }
 }
 
 pub trait ObservableExt: Observable {
@@ -114,31 +127,38 @@ impl<T> Update<T> for ! {
     }
 }
 
-// NOTE: Vec is used as a placeholder for an immutable vector
-pub trait ObservableVector: Observable<T = Vec<Self::I>> {
-    type I: Send + Clone;
+pub trait Container {
+    type C<X>;
+    type I;
 
-    fn map_vector<F, A>(
-        self,
-        f: F,
-    ) -> impl Observable<T = Vec<A>, E = Self::E, W = Self::W, U = VecUpdate<A>>
-    where
-        F: FnMut(Self::I) -> A + Send + Clone + 'static,
-        A: Send + Clone + 'static,
-    {
-        MapObservableVector {
-            observable: self,
-            f,
-        }
+    fn map_container<A>(self) -> Self::C<A>;
+}
+
+// NOTE: Vec is used as a placeholder for an immutable vector
+impl<I> Container for Vec<I> {
+    type C<X> = Vec<X>;
+    type I = I;
+
+    fn map_container<A>(self) -> Self::C<A> {
+        todo!()
     }
 }
 
-impl<O, I> ObservableVector for O
+pub trait ContainerUpdate<T>: Update<T>
 where
-    O: Observable<T = Vec<I>>,
-    I: Send + Clone,
+    T: Container,
 {
-    type I = I;
+    type U<X>: Update<T::C<X>>;
+
+    fn map_update<A>(self) -> Self::U<A>;
+}
+
+impl<I> ContainerUpdate<Vec<I>> for VecUpdate<I> {
+    type U<X> = VecUpdate<X>;
+
+    fn map_update<A>(self) -> Self::U<A> {
+        todo!()
+    }
 }
 
 #[derive(Clone)]
@@ -161,35 +181,6 @@ impl<I> Update<Vec<I>> for VecUpdate<I> {
 
     fn merge_update_mut(&mut self, next: Self) {
         todo!()
-    }
-}
-
-struct MapObservableVector<O, F, A>
-where
-    O: ObservableVector,
-    F: FnMut(O::I) -> A + Send + Clone + 'static,
-    A: Send + Clone,
-{
-    observable: O,
-    f: F,
-}
-
-impl<O, F, A> Observable for MapObservableVector<O, F, A>
-where
-    O: ObservableVector,
-    F: FnMut(O::I) -> A + Send + Clone + 'static,
-    A: Send + Clone + 'static,
-{
-    type T = Vec<A>;
-    type E = O::E;
-    type W = O::W;
-    type U = VecUpdate<A>;
-
-    fn attach<P>(self, observer: P) -> impl FnOnce() -> (Self, P) + Send
-    where
-        P: Observer<Self::T, Self::E, Self::W, Self::U> + 'static,
-    {
-        || todo!()
     }
 }
 
@@ -543,91 +534,40 @@ mod map {
     }
 }
 
-// mod map_items {
-//     use super::*;
-//
-//     pub struct MapItems<O, F, A>
-//     where
-//         O: Observable,
-//         T<O>: Send,
-//         F: FnMut(O::I) -> A,
-//     {
-//         observable: O,
-//         f: F,
-//     }
-//
-//     impl<O, A, F> MapItems<O, F, A>
-//     where
-//         O: Observable,
-//         T<O>: Send,
-//         F: FnMut(O::I) -> A,
-//     {
-//         pub fn new(observable: O, f: F) -> MapItems<O, F, A> {
-//             MapItems { observable, f }
-//         }
-//     }
-//
-//     impl<O, F, A> Observable for MapItems<O, F, A>
-//     where
-//         A: Send + 'static,
-//         O: Observable,
-//         T<O>: Send,
-//         <<O as Observable>::Puc as Puc>::C<A>: Send,
-//         F: FnMut(O::I) -> A + Send + 'static,
-//     {
-//         type I = A;
-//         type E = O::E;
-//         type W = O::W;
-//         type Puc = O::Puc;
-//         fn attach<P: Observer<T<Self>, Self::E, Self::W, U<Self>> + 'static>(
-//             self,
-//             observer: P,
-//         ) -> impl FnOnce() -> (Self, P) + Send {
-//             || todo!()
-//         }
-//     }
-//
-//     pub struct MapObserver<T, E, W, U, P, F, A>
-//     where
-//         P: Observer<A, E, W, U>,
-//         F: FnMut(T) -> A,
-//     {
-//         next: P,
-//         f: F,
-//         phantom: PhantomData<(T, E, W, U)>,
-//     }
-//
-//     impl<T, E, W, U, P, F, A> Observer<T, E, W, U> for MapObserver<T, E, W, U, P, F, A>
-//     where
-//         P: Observer<A, E, W, U>,
-//         F: FnMut(T) -> A + Send + 'static,
-//         A: Send + 'static,
-//         T: Send + 'static,
-//         E: Send + 'static,
-//         W: Send + 'static,
-//         U: Send + 'static,
-//     {
-//         fn set_changing(&mut self, clear_cache: bool) {
-//             self.next.set_changing(clear_cache)
-//         }
-//         fn set_waiting(&mut self, clear_cache: bool, marker: W) {
-//             self.next.set_waiting(clear_cache, marker)
-//         }
-//         fn set_live(
-//             &mut self,
-//             content: Option<Result<T, E>>,
-//         ) -> Box<dyn Future<Output = ()> + Sync> {
-//             match content {
-//                 Some(Ok(value)) => self.next.set_live(Some(Ok((self.f)(value)))),
-//                 Some(Err(e)) => self.next.set_live(Some(Err(e))),
-//                 None => self.next.set_live(None),
-//             }
-//         }
-//         fn update(&mut self, update: U) -> Box<dyn Future<Output = ()> + Sync> {
-//             todo!()
-//         }
-//     }
-// }
+mod map_items {
+    use super::*;
+
+    pub struct MapItems<O, F, A>(pub O, pub F)
+    where
+        O: Observable,
+        O::T: Container,
+        O::U: ContainerUpdate<O::T>,
+        F: FnMut(<O::T as Container>::I) -> A + Send + Clone + 'static,
+        A: Send + Clone;
+
+    impl<O, F, A> Observable for MapItems<O, F, A>
+    where
+        O: Observable,
+        O::T: Container,
+        O::U: ContainerUpdate<O::T>,
+        F: FnMut(<O::T as Container>::I) -> A + Send + Clone + 'static,
+        A: Send + Clone + 'static,
+        <O::T as Container>::C<A>: Send + Clone,
+        <O::U as ContainerUpdate<O::T>>::U<A>: Send + Clone,
+    {
+        type T = <O::T as Container>::C<A>;
+        type E = O::E;
+        type W = O::W;
+        type U = <O::U as ContainerUpdate<O::T>>::U<A>;
+
+        fn attach<P>(self, observer: P) -> impl FnOnce() -> (Self, P) + Send
+        where
+            P: Observer<Self::T, Self::E, Self::W, Self::U> + 'static,
+        {
+            || todo!()
+        }
+    }
+}
 
 // struct Subject<T, E> {
 //     state: ObserverState<T, E>,
