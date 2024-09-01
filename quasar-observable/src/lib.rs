@@ -241,7 +241,7 @@ impl Drop for AttachedObserver {
     }
 }
 
-enum ObserverState<T, E, W> {
+pub enum ObserverState<T, E, W> {
     Changing(Option<Result<T, E>>),
     Waiting(Option<Result<T, E>>, W),
     Live(Result<T, E>),
@@ -254,11 +254,11 @@ impl<T, E, W> Default for ObserverState<T, E, W> {
 }
 
 impl<T, E, W> ObserverState<T, E, W> {
-    fn new() -> ObserverState<T, E, W> {
+    pub fn new() -> ObserverState<T, E, W> {
         ObserverState::Changing(None)
     }
 
-    fn set_changing(self, clear_cache: bool) -> ObserverState<T, E, W> {
+    pub fn set_changing(self, clear_cache: bool) -> ObserverState<T, E, W> {
         if clear_cache {
             ObserverState::Changing(None)
         } else {
@@ -270,7 +270,7 @@ impl<T, E, W> ObserverState<T, E, W> {
         }
     }
 
-    fn set_waiting(self, clear_cache: bool, marker: W) -> ObserverState<T, E, W> {
+    pub fn set_waiting(self, clear_cache: bool, marker: W) -> ObserverState<T, E, W> {
         if clear_cache {
             ObserverState::Waiting(None, marker)
         } else {
@@ -282,7 +282,7 @@ impl<T, E, W> ObserverState<T, E, W> {
         }
     }
 
-    fn set_live(self, content: Option<Result<T, E>>) -> ObserverState<T, E, W> {
+    pub fn set_live(self, content: Option<Result<T, E>>) -> ObserverState<T, E, W> {
         match content {
             Some(content) => ObserverState::Live(content),
             None => {
@@ -296,7 +296,7 @@ impl<T, E, W> ObserverState<T, E, W> {
         }
     }
 
-    fn update<U>(self, update: U) -> ObserverState<T, E, W>
+    pub fn update<U>(self, update: U) -> ObserverState<T, E, W>
     where
         U: Update<T>,
     {
