@@ -310,7 +310,6 @@ mod retrieve {
     where
         O: Observable,
     {
-        state: Option<ObserverState<O::T, O::E, O::W>>,
         tx: Option<tokio::sync::oneshot::Sender<Result<O::T, O::E>>>,
     }
 
@@ -319,11 +318,8 @@ mod retrieve {
         O: Observable,
     {
         let (tx, rx) = tokio::sync::oneshot::channel();
-        let retrieve = Retrieve::<O> {
-            state: Some(ObserverState::new()),
-            tx: Some(tx),
-        };
-        let attached = observable.attach(retrieve);
+        let retrieve = Retrieve::<O> { tx: Some(tx) };
+        let attached = observable.attach_eval(retrieve);
 
         async {
             let result = rx.await;
@@ -332,75 +328,40 @@ mod retrieve {
             match result {
                 Ok(result) => result,
                 Err(_) => {
-                    // this should not happen because this task holds a reference to
-                    // the observable
+                    // this should not happen because this task holds a
+                    // reference to the observable
                     panic!("observer dropped without receiving a value")
                 }
             }
         }
     }
 
-    impl<O> Observer<O::T, O::E, O::W, O::U> for Retrieve<O>
+    impl<O> Observer<O::T, O::E, O::W, !> for Retrieve<O>
     where
         O: Observable,
     {
-        fn set_changing(&mut self, clear_cache: bool) {
-            let opt = std::mem::take(&mut self.state);
-            match opt {
-                None => (),
-                Some(obs) => match obs.set_changing(clear_cache) {
-                    ObserverState::Live(_content) => unreachable!(),
-                    other => self.state = Some(other),
-                },
-            }
-        }
+        fn set_changing(&mut self, _clear_cache: bool) {}
 
-        fn set_waiting(&mut self, clear_cache: bool, marker: O::W) {
-            let opt = std::mem::take(&mut self.state);
-            match opt {
-                None => (),
-                Some(obs) => match obs.set_waiting(clear_cache, marker) {
-                    ObserverState::Live(_content) => unreachable!(),
-                    other => self.state = Some(other),
-                },
-            }
-        }
+        fn set_waiting(&mut self, _clear_cache: bool, _marker: O::W) {}
 
         fn set_live(
             &mut self,
             content: Option<Result<O::T, O::E>>,
         ) -> Box<dyn Future<Output = ()> + Sync> {
-            let opt = std::mem::take(&mut self.state);
-            match opt {
-                None => (),
-                Some(obs) => match obs.set_live(content) {
-                    ObserverState::Live(content) => {
-                        let tx = std::mem::take(&mut self.tx);
-                        if let Some(tx) = tx {
-                            let _ = tx.send(content);
-                        }
-                    }
-                    other => self.state = Some(other),
-                },
+            let content = match content {
+                Some(content) => content,
+                None => panic!(),
             };
+
+            let tx = std::mem::take(&mut self.tx);
+            if let Some(tx) = tx {
+                let _ = tx.send(content);
+            }
             Box::new(std::future::ready(()))
         }
 
-        fn update(&mut self, update: O::U) -> Box<dyn Future<Output = ()> + Sync> {
-            let opt = std::mem::take(&mut self.state);
-            match opt {
-                None => (),
-                Some(obs) => match obs.update(update) {
-                    ObserverState::Live(content) => {
-                        let tx = std::mem::take(&mut self.tx);
-                        if let Some(tx) = tx {
-                            let _ = tx.send(content);
-                        }
-                    }
-                    other => self.state = Some(other),
-                },
-            };
-            Box::new(std::future::ready(()))
+        fn update(&mut self, update: !) -> Box<dyn Future<Output = ()> + Sync> {
+            match update {}
         }
     }
 }
