@@ -15,10 +15,10 @@ pub trait Observable
 where
     Self: Sized + 'static,
 {
-    type T: Send + Clone;
-    type E: Send + Clone;
-    type W: Send + Clone = !;
-    type U: Update<Self::T> + Send + Clone = !;
+    type T: Send;
+    type E: Send;
+    type W: Send = !;
+    type U: Update<Self::T> + Send = !;
 
     #[must_use]
     fn attach<P>(self, observer: P) -> impl FnOnce() -> (Self, P) + Send
@@ -84,24 +84,11 @@ where
     }
 }
 
-pub trait Update<T> {
+pub trait Update<T>: EvalUpdate<T> {
     fn apply_update(self, target: T) -> T;
     fn apply_update_mut(self, target: &mut T);
     fn merge_update(self, next: Self) -> Self;
     fn merge_update_mut(&mut self, next: Self);
-
-    #[must_use]
-    fn attach_eval_observer<O, R>(observable: O, observer: R) -> impl FnOnce() -> (O, R) + Send
-    where
-        O: Observable<T = T, U = Self>,
-        R: Observer<O::T, O::E, O::W, !> + 'static,
-    {
-        let detach = observable.attach(self::eval::EvalObserver::<O, R>::new(observer));
-        || {
-            let (observable, eval_observer) = detach();
-            (observable, eval_observer.observer)
-        }
-    }
 }
 
 impl<T> Update<T> for ! {
@@ -117,7 +104,37 @@ impl<T> Update<T> for ! {
     fn merge_update_mut(&mut self, _next: Self) {
         match *self {}
     }
+}
 
+pub trait EvalUpdate<T> {
+    #[must_use]
+    fn attach_eval_observer<O, R>(observable: O, observer: R) -> impl FnOnce() -> (O, R) + Send
+    where
+        O: Observable<T = T, U = Self>,
+        R: Observer<O::T, O::E, O::W, !> + 'static;
+}
+
+pub trait EvalUpdateMarker {}
+
+impl<U, T> EvalUpdate<T> for U
+where
+    U: EvalUpdateMarker,
+    T: Send + Clone,
+{
+    fn attach_eval_observer<O, R>(observable: O, observer: R) -> impl FnOnce() -> (O, R) + Send
+    where
+        O: Observable<T = T, U = Self>,
+        R: Observer<O::T, O::E, O::W, !> + 'static,
+    {
+        let detach = observable.attach(self::eval::EvalObserver::<O, R>::new(observer));
+        || {
+            let (observable, eval_observer) = detach();
+            (observable, eval_observer.observer)
+        }
+    }
+}
+
+impl<T> EvalUpdate<T> for ! {
     fn attach_eval_observer<O, R>(observable: O, observer: R) -> impl FnOnce() -> (O, R) + Send
     where
         O: Observable<T = T, U = Self>,
@@ -131,7 +148,9 @@ pub trait Container {
     type C<X>;
     type I;
 
-    fn map_container<A>(self) -> Self::C<A>;
+    fn map_container<F, A>(self, f: F) -> Self::C<A>
+    where
+        F: FnMut(Self::I) -> A;
 }
 
 // NOTE: Vec is used as a placeholder for an immutable vector
@@ -139,7 +158,10 @@ impl<I> Container for Vec<I> {
     type C<X> = Vec<X>;
     type I = I;
 
-    fn map_container<A>(self) -> Self::C<A> {
+    fn map_container<F, A>(self, _f: F) -> Self::C<A>
+    where
+        F: FnMut(Self::I) -> A,
+    {
         todo!()
     }
 }
@@ -148,15 +170,25 @@ pub trait ContainerUpdate<T>: Update<T>
 where
     T: Container,
 {
-    type U<X>: Update<T::C<X>>;
+    type U<X: Send + Clone>: Update<T::C<X>>;
 
-    fn map_update<A>(self) -> Self::U<A>;
+    fn map_update<F, A>(self) -> Self::U<A>
+    where
+        F: FnMut(T::I) -> A,
+        A: Send + Clone;
 }
 
-impl<I> ContainerUpdate<Vec<I>> for VecUpdate<I> {
-    type U<X> = VecUpdate<X>;
+impl<I> ContainerUpdate<Vec<I>> for VecUpdate<I>
+where
+    I: Send + Clone,
+{
+    type U<X: Send + Clone> = VecUpdate<X>;
 
-    fn map_update<A>(self) -> Self::U<A> {
+    fn map_update<F, A>(self) -> Self::U<A>
+    where
+        F: FnMut(I) -> A,
+        A: Send + Clone,
+    {
         todo!()
     }
 }
@@ -166,7 +198,12 @@ enum VecUpdate<I> {
     Insert(u64, I),
 }
 
-impl<I> Update<Vec<I>> for VecUpdate<I> {
+impl<I> EvalUpdateMarker for VecUpdate<I> {}
+
+impl<I> Update<Vec<I>> for VecUpdate<I>
+where
+    I: Send + Clone,
+{
     fn apply_update(self, target: Vec<I>) -> Vec<I> {
         todo!()
     }
@@ -316,7 +353,7 @@ mod eval {
         R: Observer<O::T, O::E, O::W, !>,
     {
         pub observer: R,
-        observer_state: ObserverState<O::T, O::E, O::W>,
+        cache: Option<O::T>,
     }
 
     impl<O, R> EvalObserver<O, R>
@@ -327,7 +364,7 @@ mod eval {
         pub fn new(observer: R) -> Self {
             EvalObserver {
                 observer,
-                observer_state: ObserverState::new(),
+                cache: None,
             }
         }
     }
@@ -335,19 +372,20 @@ mod eval {
     impl<O, R> Observer<O::T, O::E, O::W, O::U> for EvalObserver<O, R>
     where
         O: Observable,
+        O::T: Clone,
         R: Observer<O::T, O::E, O::W, !>,
     {
         fn set_changing(&mut self, clear_cache: bool) {
-            let state = std::mem::take(&mut self.observer_state);
-            let state = state.set_changing(clear_cache);
-            self.observer_state = state;
+            if clear_cache {
+                std::mem::take(&mut self.cache);
+            }
             self.observer.set_changing(clear_cache);
         }
 
         fn set_waiting(&mut self, clear_cache: bool, marker: O::W) {
-            let state = std::mem::take(&mut self.observer_state);
-            let state = state.set_waiting(clear_cache, marker.clone());
-            self.observer_state = state;
+            if clear_cache {
+                std::mem::take(&mut self.cache);
+            }
             self.observer.set_waiting(clear_cache, marker);
         }
 
@@ -355,20 +393,22 @@ mod eval {
             &mut self,
             content: Option<Result<O::T, O::E>>,
         ) -> Box<dyn Future<Output = ()> + Sync> {
-            let state = std::mem::take(&mut self.observer_state);
-            let state = state.set_live(content.clone());
-            self.observer_state = state;
+            match &content {
+                Some(Ok(value)) => self.cache = Some(value.clone()),
+                Some(Err(e)) => self.cache = None,
+                None => (),
+            }
             self.observer.set_live(content)
         }
 
         fn update(&mut self, update: O::U) -> Box<dyn Future<Output = ()> + Sync> {
-            let state = std::mem::take(&mut self.observer_state);
-            let state = state.update(update);
-            self.observer_state = state;
-            match &self.observer_state {
-                ObserverState::Live(content) => self.observer.set_live(Some(content.clone())),
-                _ => unreachable!(),
-            }
+            let cache = match std::mem::take(&mut self.cache) {
+                Some(cache) => cache,
+                None => panic!(),
+            };
+            let value = update.apply_update(cache);
+            self.cache = Some(value.clone());
+            self.observer.set_live(Some(Ok(value)))
         }
     }
 }
@@ -636,6 +676,9 @@ mod share {
     impl<O> Observable for Arc<Share<O>>
     where
         O: Observable + Send,
+        O::T: Clone,
+        O::E: Clone,
+        O::W: Clone,
     {
         type T = O::T;
         type E = O::E;
@@ -723,6 +766,9 @@ mod share {
     impl<O> Observer<O::T, O::E, O::W, O::U> for ShareObserver<O>
     where
         O: Observable + Send,
+        O::T: Clone,
+        O::E: Clone,
+        O::W: Clone,
     {
         fn set_changing(&mut self, _clear_cache: bool) {
             let _ = self.0;
