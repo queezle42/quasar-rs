@@ -60,10 +60,10 @@ where
     where
         Self::T: Container,
         Self::U: ContainerUpdate<Self::T>,
-        F: FnMut(<Self::T as Container>::I) -> A + Send + Clone + 'static,
+        F: FnMut(<Self::T as Container>::I) -> A + Send + 'static,
         A: Send + Clone + 'static,
-        <Self::T as Container>::C<A>: Send + Clone,
-        <Self::U as ContainerUpdate<Self::T>>::U<A>: Send + Clone,
+        <Self::T as Container>::C<A>: Send,
+        <Self::U as ContainerUpdate<Self::T>>::U<A>: Send,
     {
         self::map_items::MapItems(self, f)
     }
@@ -582,7 +582,7 @@ mod map_items {
         O: Observable,
         O::T: Container,
         O::U: ContainerUpdate<O::T>,
-        F: FnMut(<O::T as Container>::I) -> A + Send + Clone + 'static,
+        F: FnMut(<O::T as Container>::I) -> A + Send + 'static,
         A: Send + Clone;
 
     impl<O, F, A> Observable for MapItems<O, F, A>
@@ -590,10 +590,10 @@ mod map_items {
         O: Observable,
         O::T: Container,
         O::U: ContainerUpdate<O::T>,
-        F: FnMut(<O::T as Container>::I) -> A + Send + Clone + 'static,
+        F: FnMut(<O::T as Container>::I) -> A + Send + 'static,
         A: Send + Clone + 'static,
-        <O::T as Container>::C<A>: Send + Clone,
-        <O::U as ContainerUpdate<O::T>>::U<A>: Send + Clone,
+        <O::T as Container>::C<A>: Send,
+        <O::U as ContainerUpdate<O::T>>::U<A>: Send,
     {
         type T = <O::T as Container>::C<A>;
         type E = O::E;
