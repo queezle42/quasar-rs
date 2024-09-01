@@ -194,7 +194,7 @@ where
 }
 
 #[derive(Clone)]
-enum VecUpdate<I> {
+pub enum VecUpdate<I> {
     Insert(u64, I),
 }
 
