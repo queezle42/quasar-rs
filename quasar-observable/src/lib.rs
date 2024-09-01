@@ -114,6 +114,85 @@ impl<T> Update<T> for ! {
     }
 }
 
+// NOTE: Vec is used as a placeholder for an immutable vector
+pub trait ObservableVector: Observable<T = Vec<Self::I>> {
+    type I: Send + Clone;
+
+    fn map_vector<F, A>(
+        self,
+        f: F,
+    ) -> impl Observable<T = Vec<A>, E = Self::E, W = Self::W, U = VecUpdate<A>>
+    where
+        F: FnMut(Self::I) -> A + Send + Clone + 'static,
+        A: Send + Clone + 'static,
+    {
+        MapObservableVector {
+            observable: self,
+            f,
+        }
+    }
+}
+
+impl<O, I> ObservableVector for O
+where
+    O: Observable<T = Vec<I>>,
+    I: Send + Clone,
+{
+    type I = I;
+}
+
+#[derive(Clone)]
+enum VecUpdate<I> {
+    Insert(u64, I),
+}
+
+impl<I> Update<Vec<I>> for VecUpdate<I> {
+    fn apply_update(self, target: Vec<I>) -> Vec<I> {
+        todo!()
+    }
+
+    fn apply_update_mut(self, target: &mut Vec<I>) {
+        todo!()
+    }
+
+    fn merge_update(self, next: Self) -> Self {
+        todo!()
+    }
+
+    fn merge_update_mut(&mut self, next: Self) {
+        todo!()
+    }
+}
+
+struct MapObservableVector<O, F, A>
+where
+    O: ObservableVector,
+    F: FnMut(O::I) -> A + Send + Clone + 'static,
+    A: Send + Clone,
+{
+    observable: O,
+    f: F,
+}
+
+impl<O, F, A> Observable for MapObservableVector<O, F, A>
+where
+    O: ObservableVector,
+    F: FnMut(O::I) -> A + Send + Clone + 'static,
+    A: Send + Clone + 'static,
+{
+    type T = Vec<A>;
+    type E = O::E;
+    type W = O::W;
+    type U = VecUpdate<A>;
+
+    fn attach<P>(self, observer: P) -> impl FnOnce() -> (Self, P) + Send
+    where
+        P: Observer<Self::T, Self::E, Self::W, Self::U> + 'static,
+    {
+        || todo!()
+    }
+}
+
 pub trait Observer<T, E, W, U>: Any + Send
 where
     U: Update<T>,
