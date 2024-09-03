@@ -37,14 +37,24 @@ where
         attached.map(|_| {})
     }
 
-    fn share(self) -> ObservableBox<Self::T, Self::E, Self::W, Self::U>
+    fn share(self) -> impl SharedObservable<T = Self::T, E = Self::E, W = Self::W, U = Self::U>
     where
         Self: Send + Sized,
         Self::T: Clone,
         Self::E: Clone,
         Self::W: Clone,
     {
-        ObservableBox::new(self.share_unboxed())
+        Arc::new(share::Share::new(self))
+    }
+
+    fn share_box(self) -> ObservableBox<Self::T, Self::E, Self::W, Self::U>
+    where
+        Self: Send + Sized,
+        Self::T: Clone,
+        Self::E: Clone,
+        Self::W: Clone,
+    {
+        ObservableBox::new(self.share())
     }
 
     fn retrieve(self) -> impl Future<Output = Result<Self::T, Self::E>> + Send
@@ -101,13 +111,6 @@ pub trait ObservableExt: Observable {
         Self: Sized,
     {
         self::eval::Eval(self)
-    }
-
-    fn share_unboxed(self) -> Arc<share::Share<Self>>
-    where
-        Self: Sized,
-    {
-        Arc::new(share::Share::new(self))
     }
 }
 
