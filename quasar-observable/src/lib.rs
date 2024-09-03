@@ -34,9 +34,7 @@ where
         P: Observer<Self::T, Self::E, Self::W, Self::U> + 'static,
     {
         let attached = self.attach(observer);
-        Attached::new(|| {
-            let _ = attached.detach();
-        })
+        attached.map(|_| {})
     }
 
     fn share(self) -> ObservableBox<Self::T, Self::E, Self::W, Self::U>
@@ -142,10 +140,7 @@ where
     {
         let cloned = self.clone_box();
         let attached = self.0.attach_box(Box::new(observer));
-        Attached::new(|| {
-            attached.detach();
-            cloned
-        })
+        attached.map(|()| cloned)
     }
 
     fn attach_final<P>(self, observer: P) -> Attached<()>
@@ -187,13 +182,22 @@ impl<R> Drop for Attached<R> {
 }
 
 impl<R> Attached<R> {
-    fn new(f: impl FnOnce() -> R + Send + 'static) -> Self {
+    pub fn new(f: impl FnOnce() -> R + Send + 'static) -> Self {
         Attached(Some(Box::new(f)))
     }
 
-    fn detach(mut self) -> R {
+    pub fn detach(mut self) -> R {
         let f = std::mem::take(&mut self.0).unwrap();
         f()
+    }
+
+    pub fn map<F, A>(mut self, f: F) -> Attached<A>
+    where
+        R: 'static,
+        F: (FnOnce(R) -> A) + Send + 'static,
+    {
+        let detach = std::mem::take(&mut self.0).unwrap();
+        Attached::new(|| f(detach()))
     }
 }
 
@@ -578,7 +582,7 @@ mod eval {
             P: Observer<Self::T, Self::E, Self::W, !> + 'static,
         {
             let attached = O::U::attach_eval_observer(self.0, observer);
-            Attached::new(|| Eval(attached.detach()))
+            attached.map(|observable| Eval(observable))
         }
 
         fn attach_final<P>(self, observer: P) -> Attached<()>
@@ -751,18 +755,13 @@ mod map {
         type E = O::E;
         type W = O::W;
         fn attach<P: Observer<A, O::E, O::W, !> + 'static>(self, observer: P) -> Attached<Self> {
-            // attach
             let f = self.f;
             let attached = self.observable.eval().attach(MapObserver {
                 f: f.clone(),
                 next: observer,
                 phantom: PhantomData,
             });
-            // detach fn
-            Attached::new(|| {
-                let super::eval::Eval(observable) = attached.detach();
-                Map { observable, f }
-            })
+            attached.map(|super::eval::Eval(observable)| Map { observable, f })
         }
 
         fn attach_final<P: Observer<A, O::E, O::W, !> + 'static>(
