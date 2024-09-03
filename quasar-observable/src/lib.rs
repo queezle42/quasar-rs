@@ -10,6 +10,7 @@ use std::marker::PhantomData;
 use std::ops::FnMut;
 use std::ops::FnOnce;
 use std::sync::Arc;
+use std::sync::Mutex;
 
 pub trait Observable
 where
@@ -488,6 +489,91 @@ impl<T, E, W> ObserverState<T, E, W> {
     }
 }
 
+mod detacher {
+    use super::*;
+
+    pub struct ObserverDetacher<R>(Arc<Mutex<Option<R>>>);
+
+    impl<R> ObserverDetacher<R> {
+        pub fn new<T, E, W, U>(observer: R) -> (ObserverDetacher<R>, ObserverBox<T, E, W, U>)
+        where
+            R: Observer<T, E, W, U>,
+            T: Send + 'static,
+            E: Send + 'static,
+            W: Send + 'static,
+            U: Update<T> + Send + 'static,
+        {
+            let arc = Arc::new(Mutex::new(Some(observer)));
+            (
+                ObserverDetacher(arc.clone()),
+                Box::new(DetacherProxy(arc, PhantomData)),
+            )
+        }
+
+        pub fn detach(self) -> R {
+            let opt = match Arc::try_unwrap(self.0) {
+                Err(arc) => {
+                    // normal path: arc is still shared
+                    let mut guard = arc.lock().unwrap();
+                    std::mem::take(&mut *guard)
+                }
+                Ok(mutex) => {
+                    // exclusive ownership path
+                    mutex.into_inner().unwrap()
+                }
+            };
+            // This is the only code path that returns the inner observer from
+            // the `DetachableObserver`. Since the `DetachableObserver` is
+            // comsumed here, the unwrap ist safe.
+            opt.unwrap()
+        }
+    }
+
+    struct DetacherProxy<R, T, E, W, U>(Arc<Mutex<Option<R>>>, PhantomData<(T, E, W, U)>);
+
+    impl<R, T, E, W, U> Observer<T, E, W, U> for DetacherProxy<R, T, E, W, U>
+    where
+        R: Observer<T, E, W, U>,
+        T: Send + 'static,
+        E: Send + 'static,
+        W: Send + 'static,
+        U: Update<T> + Send + 'static,
+    {
+        fn set_changing(&mut self, clear_cache: bool) {
+            let mut guard = self.0.lock().unwrap();
+            if let Some(observer) = &mut *guard {
+                observer.set_changing(clear_cache)
+            }
+        }
+
+        fn set_waiting(&mut self, clear_cache: bool, marker: W) {
+            let mut guard = self.0.lock().unwrap();
+            if let Some(observer) = &mut *guard {
+                observer.set_waiting(clear_cache, marker)
+            }
+        }
+
+        fn set_live(
+            &mut self,
+            content: Option<Result<T, E>>,
+        ) -> Box<dyn Future<Output = ()> + Sync> {
+            let mut guard = self.0.lock().unwrap();
+            match &mut *guard {
+                Some(observer) => observer.set_live(content),
+                None => Box::new(std::future::pending()),
+            }
+        }
+
+        fn update(&mut self, update: U) -> Box<dyn Future<Output = ()> + Sync> {
+            let mut guard = self.0.lock().unwrap();
+            match &mut *guard {
+                Some(observer) => observer.update(update),
+                None => Box::new(std::future::pending()),
+            }
+        }
+    }
+}
+
 mod eval {
     use super::*;
 
@@ -825,7 +911,7 @@ mod share {
     where
         O: Observable,
     {
-        state: std::sync::Mutex<State<O>>,
+        state: Mutex<State<O>>,
     }
 
     enum State<O>
@@ -853,7 +939,7 @@ mod share {
     {
         pub fn new(observable: O) -> Share<O> {
             Share {
-                state: std::sync::Mutex::new(State::Detached(Some(observable))),
+                state: Mutex::new(State::Detached(Some(observable))),
             }
         }
     }
