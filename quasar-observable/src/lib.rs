@@ -384,16 +384,6 @@ where
     fn update(&mut self, update: U) -> Box<dyn Future<Output = ()> + Sync>;
 }
 
-pub struct AttachedObserver(Option<Box<dyn FnOnce() + Sync + Send>>);
-impl Drop for AttachedObserver {
-    fn drop(&mut self) {
-        let AttachedObserver(state) = self;
-        if let Some(detach) = std::mem::take(state) {
-            detach();
-        }
-    }
-}
-
 type ObserverBox<T, E, W, U> = Box<dyn Observer<T, E, W, U>>;
 
 impl<T, E, W, U> Observer<T, E, W, U> for ObserverBox<T, E, W, U>
