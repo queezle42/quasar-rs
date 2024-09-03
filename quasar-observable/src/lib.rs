@@ -59,7 +59,7 @@ where
     fn map<F, A>(self, f: F) -> self::map::Map<Self, F, A>
     where
         Self: Sized,
-        F: FnMut(Self::T) -> A,
+        F: Fn(Self::T) -> A + Send + Sync,
     {
         self::map::Map::new(self, f)
     }
@@ -724,18 +724,19 @@ mod map {
     pub struct Map<O, F, A>
     where
         O: Observable,
-        F: FnMut(O::T) -> A,
+        F: Fn(O::T) -> A,
     {
         observable: O,
-        f: F,
+        f: Arc<F>,
     }
 
     impl<O, A, F> Map<O, F, A>
     where
         O: Observable,
-        F: FnMut(O::T) -> A,
+        F: Fn(O::T) -> A,
     {
         pub fn new(observable: O, f: F) -> Map<O, F, A> {
+            let f = Arc::new(f);
             Map { observable, f }
         }
     }
@@ -744,23 +745,22 @@ mod map {
     where
         A: Send + Clone + 'static,
         O: Observable,
-        F: FnMut(O::T) -> A + Send + Clone + 'static,
+        F: Fn(O::T) -> A + Send + Sync + 'static,
     {
         type T = A;
         type E = O::E;
         type W = O::W;
         fn attach<P: Observer<A, O::E, O::W, !> + 'static>(self, observer: P) -> Attached<Self> {
             // attach
-            let (detacher, observer) = super::detacher::ObserverDetacher::new(MapObserver {
-                f: self.f,
+            let f = self.f;
+            let attached = self.observable.eval().attach(MapObserver {
+                f: f.clone(),
                 next: observer,
                 phantom: PhantomData,
             });
-            let attached = self.observable.eval().attach(observer);
             // detach fn
             Attached::new(|| {
                 let super::eval::Eval(observable) = attached.detach();
-                let MapObserver { f, .. } = detacher.detach();
                 Map { observable, f }
             })
         }
@@ -780,17 +780,17 @@ mod map {
     pub struct MapObserver<T, E, W, P, F, A>
     where
         P: Observer<A, E, W, !>,
-        F: FnMut(T) -> A,
+        F: Fn(T) -> A,
     {
         next: P,
-        f: F,
+        f: Arc<F>,
         phantom: PhantomData<(T, E, W)>,
     }
 
     impl<T, A, E, W, P, F> Observer<T, E, W, !> for MapObserver<T, E, W, P, F, A>
     where
         P: Observer<A, E, W, !>,
-        F: FnMut(T) -> A + Send + 'static,
+        F: Fn(T) -> A + Send + Sync + 'static,
         A: Send + 'static,
         T: Send + 'static,
         E: Send + 'static,
