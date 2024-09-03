@@ -58,7 +58,7 @@
           });
 
       watch = pkgs.writeScriptBin "watch" ''
-        cargo watch --clear --delay .1 -x 'clippy --workspace --all-targets' -x 'nextest run --workspace --all-targets' -x 'test --doc --workspace'
+        cargo watch --clear --delay .1 -x 'clippy --workspace --all-targets' -x 'nextest run --workspace --all-targets' -x 'test --doc --workspace' -x 'doc --workspace'
       '';
     in {
       packages = {
