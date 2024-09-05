@@ -87,6 +87,8 @@ impl PureObservable for u64 {}
 impl PureObservable for u128 {}
 impl PureObservable for usize {}
 
+impl PureObservable for () {}
+
 impl<A, B> PureObservable for (A, B)
 where
     A: PureObservable,
