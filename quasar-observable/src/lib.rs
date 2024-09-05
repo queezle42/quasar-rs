@@ -336,6 +336,12 @@ where
     fn set_waiting(&mut self, clear_cache: bool, marker: W);
     fn set_live(&mut self, content: Option<Result<T, E>>) -> Box<dyn Future<Output = ()> + Sync>;
     fn update(&mut self, update: U) -> Box<dyn Future<Output = ()> + Sync>;
+    fn into_box(self) -> Box<dyn Observer<T, E, W, U>>
+    where
+        Self: Sized,
+    {
+        Box::new(self)
+    }
 }
 
 type ObserverBox<T, E, W, U> = Box<dyn Observer<T, E, W, U>>;
@@ -361,6 +367,10 @@ where
 
     fn update(&mut self, update: U) -> Box<dyn Future<Output = ()> + Sync> {
         (**self).update(update)
+    }
+
+    fn into_box(self) -> Box<dyn Observer<T, E, W, U>> {
+        self
     }
 }
 
