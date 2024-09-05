@@ -165,3 +165,18 @@ where
         SharedObservableBox::new(self.clone())
     }
 }
+
+#[cfg(test)]
+#[tokio::test]
+async fn retrieve_pure_scalar() {
+    let result = 42.retrieve().await.unwrap();
+    assert_eq!(result, 42)
+}
+
+#[cfg(test)]
+#[tokio::test]
+async fn map_pure_scalar() {
+    let observable = 21.map(|i| i * 2);
+    let result = observable.retrieve().await.unwrap();
+    assert_eq!(result, 42)
+}
