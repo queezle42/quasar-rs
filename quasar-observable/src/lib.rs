@@ -205,8 +205,14 @@ where
     }
 }
 
+pub enum Selector {
+    All,
+    None,
+}
+
 pub struct AttachedObservable<R> {
     detach: Option<Box<dyn FnOnce() -> R + Send>>,
+    configure: Box<dyn FnMut(Selector) + Send>,
 }
 
 impl<R> Drop for AttachedObservable<R> {
@@ -218,9 +224,13 @@ impl<R> Drop for AttachedObservable<R> {
 }
 
 impl<R> AttachedObservable<R> {
-    pub fn new(detach: impl FnOnce() -> R + Send + 'static) -> Self {
+    pub fn new(
+        detach: impl FnOnce() -> R + Send + 'static,
+        configure: impl FnMut(Selector) + Send + 'static,
+    ) -> Self {
         AttachedObservable {
             detach: Some(Box::new(detach)),
+            configure: Box::new(configure),
         }
     }
 
@@ -229,22 +239,18 @@ impl<R> AttachedObservable<R> {
         detach()
     }
 
+    pub fn configure(&mut self, selector: Selector) {
+        (self.configure)(selector)
+    }
+
     pub fn map<F, A>(mut self, f: F) -> AttachedObservable<A>
     where
         R: 'static,
         F: (FnOnce(R) -> A) + Send + 'static,
     {
         let detach = std::mem::take(&mut self.detach).unwrap();
-        AttachedObservable::new(|| f(detach()))
-    }
-}
-
-impl<F, R> From<F> for AttachedObservable<R>
-where
-    F: FnOnce() -> R + Send + 'static,
-{
-    fn from(f: F) -> Self {
-        AttachedObservable::new(f)
+        let configure = std::mem::replace(&mut self.configure, Box::new(|_| ()));
+        AttachedObservable::new(|| f(detach()), configure)
     }
 }
 
@@ -1056,32 +1062,36 @@ mod share {
             };
             // release mutex guard to reuse `self`
             drop(state);
-            AttachedObservable::new(move || {
-                let mut state = self.state.lock().unwrap();
+            AttachedObservable::new(
+                move || {
+                    let mut state = self.state.lock().unwrap();
 
-                let observer = match &mut *state {
-                    State::Detached(_observable) => unreachable!(),
-                    State::Attached(attached) => {
-                        let observer_box = attached.observers.remove(&observer_id).unwrap();
-                        let observer_box = (observer_box as Box<dyn Any>).downcast::<P>().unwrap();
-                        let observer = *observer_box;
-                        if attached.observers.is_empty() {
-                            if let State::Attached(attached) =
-                                std::mem::replace(&mut *state, State::Detached(None))
-                            {
-                                let observable = attached.attached.detach();
-                                *state = State::Detached(Some(observable));
-                            } else {
-                                unreachable!()
+                    let observer = match &mut *state {
+                        State::Detached(_observable) => unreachable!(),
+                        State::Attached(attached) => {
+                            let observer_box = attached.observers.remove(&observer_id).unwrap();
+                            let observer_box =
+                                (observer_box as Box<dyn Any>).downcast::<P>().unwrap();
+                            let observer = *observer_box;
+                            if attached.observers.is_empty() {
+                                if let State::Attached(attached) =
+                                    std::mem::replace(&mut *state, State::Detached(None))
+                                {
+                                    let observable = attached.attached.detach();
+                                    *state = State::Detached(Some(observable));
+                                } else {
+                                    unreachable!()
+                                }
                             }
+                            observer
                         }
-                        observer
-                    }
-                };
-                drop(state);
+                    };
+                    drop(state);
 
-                self
-            })
+                    self
+                },
+                |_selector| todo!(),
+            )
         }
 
         fn attach_return_box(

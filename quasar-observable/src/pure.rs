@@ -35,7 +35,7 @@ where
         P: Observer<Self::T, Self::E, Self::W, Self::U> + 'static,
     {
         let _ = observer.set_live(Some(Ok(self.0)));
-        AttachedObservable::new(|| ())
+        AttachedObservable::new(|| (), |_| ())
     }
 
     fn attach_box(
@@ -43,7 +43,7 @@ where
         mut observer: ObserverBox<Self::T, Self::E, Self::W, Self::U>,
     ) -> AttachedObservable<()> {
         let _ = (*observer).set_live(Some(Ok((*self).0)));
-        AttachedObservable::new(|| ())
+        AttachedObservable::new(|| (), |_| ())
     }
 
     fn share(self) -> impl SharedObservable<T = Self::T, E = Self::E, W = Self::W, U = Self::U>
@@ -141,7 +141,7 @@ where
         P: Observer<Self::T, Self::E, Self::W, Self::U> + 'static,
     {
         let _ = observer.set_live(Some(Ok(self.clone())));
-        AttachedObservable::new(|| self)
+        AttachedObservable::new(|| self, |_| ())
     }
 
     fn attach_return_box(
@@ -149,7 +149,7 @@ where
         mut observer: ObserverBox<Self::T, Self::E, Self::W, Self::U>,
     ) -> AttachedObservable<ObservableBox<Self::T, Self::E, Self::W, Self::U>> {
         let _ = (*observer).set_live(Some(Ok((*self).clone())));
-        AttachedObservable::new(|| ObservableBox::new(*self))
+        AttachedObservable::new(|| ObservableBox::new(*self), |_| ())
     }
 
     fn attach<P>(self, mut observer: P) -> AttachedObservable<()>
@@ -158,7 +158,7 @@ where
         P: Observer<Self::T, Self::E, Self::W, Self::U> + 'static,
     {
         let _ = observer.set_live(Some(Ok(self)));
-        AttachedObservable::new(|| ())
+        AttachedObservable::new(|| (), |_| ())
     }
 
     fn attach_box(
@@ -166,7 +166,7 @@ where
         mut observer: ObserverBox<Self::T, Self::E, Self::W, Self::U>,
     ) -> AttachedObservable<()> {
         let _ = (*observer).set_live(Some(Ok(*self)));
-        AttachedObservable::new(|| ())
+        AttachedObservable::new(|| (), |_| ())
     }
 
     fn share(self) -> impl SharedObservable<T = Self::T, E = Self::E, W = Self::W, U = Self::U>
@@ -205,7 +205,7 @@ where
         mut observer: ObserverBox<Self::T, Self::E, Self::W, Self::U>,
     ) -> AttachedObservable<SharedObservableBox<Self::T, Self::E, Self::W, Self::U>> {
         let _ = (*observer).set_live(Some(Ok((*self).clone())));
-        AttachedObservable::new(|| SharedObservableBox::new(*self))
+        AttachedObservable::new(|| SharedObservableBox::new(*self), |_| ())
     }
 
     fn clone_box(&self) -> SharedObservableBox<Self::T, Self::E, Self::W, Self::U> {
