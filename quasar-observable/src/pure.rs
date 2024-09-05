@@ -14,7 +14,7 @@ where
     type W = !;
     type U = !;
 
-    fn attach_return<P>(self, mut observer: P) -> Attached<Self>
+    fn attach_return<P>(self, mut observer: P) -> AttachedObservable<Self>
     where
         Self: Sized,
         P: Observer<Self::T, Self::E, Self::W, Self::U> + 'static,
@@ -25,25 +25,25 @@ where
     fn attach_return_box(
         self: Box<Self>,
         mut observer: ObserverBox<Self::T, Self::E, Self::W, Self::U>,
-    ) -> Attached<ObservableBox<Self::T, Self::E, Self::W, Self::U>> {
+    ) -> AttachedObservable<ObservableBox<Self::T, Self::E, Self::W, Self::U>> {
         todo!()
     }
 
-    fn attach<P>(self, mut observer: P) -> Attached<()>
+    fn attach<P>(self, mut observer: P) -> AttachedObservable<()>
     where
         Self: Sized,
         P: Observer<Self::T, Self::E, Self::W, Self::U> + 'static,
     {
         let _ = observer.set_live(Some(Ok(self.0)));
-        Attached::new(|| ())
+        AttachedObservable::new(|| ())
     }
 
     fn attach_box(
         self: Box<Self>,
         mut observer: ObserverBox<Self::T, Self::E, Self::W, Self::U>,
-    ) -> Attached<()> {
+    ) -> AttachedObservable<()> {
         let _ = (*observer).set_live(Some(Ok((*self).0)));
-        Attached::new(|| ())
+        AttachedObservable::new(|| ())
     }
 
     fn share(self) -> impl SharedObservable<T = Self::T, E = Self::E, W = Self::W, U = Self::U>
@@ -80,7 +80,7 @@ where
     fn attach_return_shared_box(
         self: Box<Self>,
         observer: ObserverBox<Self::T, Self::E, Self::W, Self::U>,
-    ) -> Attached<SharedObservableBox<Self::T, Self::E, Self::W, Self::U>> {
+    ) -> AttachedObservable<SharedObservableBox<Self::T, Self::E, Self::W, Self::U>> {
         self.attach_return(observer).map(SharedObservableBox::new)
     }
 
@@ -135,38 +135,38 @@ where
     type W = !;
     type U = !;
 
-    fn attach_return<P>(self, mut observer: P) -> Attached<Self>
+    fn attach_return<P>(self, mut observer: P) -> AttachedObservable<Self>
     where
         Self: Sized,
         P: Observer<Self::T, Self::E, Self::W, Self::U> + 'static,
     {
         let _ = observer.set_live(Some(Ok(self.clone())));
-        Attached::new(|| self)
+        AttachedObservable::new(|| self)
     }
 
     fn attach_return_box(
         self: Box<Self>,
         mut observer: ObserverBox<Self::T, Self::E, Self::W, Self::U>,
-    ) -> Attached<ObservableBox<Self::T, Self::E, Self::W, Self::U>> {
+    ) -> AttachedObservable<ObservableBox<Self::T, Self::E, Self::W, Self::U>> {
         let _ = (*observer).set_live(Some(Ok((*self).clone())));
-        Attached::new(|| ObservableBox::new(*self))
+        AttachedObservable::new(|| ObservableBox::new(*self))
     }
 
-    fn attach<P>(self, mut observer: P) -> Attached<()>
+    fn attach<P>(self, mut observer: P) -> AttachedObservable<()>
     where
         Self: Sized,
         P: Observer<Self::T, Self::E, Self::W, Self::U> + 'static,
     {
         let _ = observer.set_live(Some(Ok(self)));
-        Attached::new(|| ())
+        AttachedObservable::new(|| ())
     }
 
     fn attach_box(
         self: Box<Self>,
         mut observer: ObserverBox<Self::T, Self::E, Self::W, Self::U>,
-    ) -> Attached<()> {
+    ) -> AttachedObservable<()> {
         let _ = (*observer).set_live(Some(Ok(*self)));
-        Attached::new(|| ())
+        AttachedObservable::new(|| ())
     }
 
     fn share(self) -> impl SharedObservable<T = Self::T, E = Self::E, W = Self::W, U = Self::U>
@@ -203,9 +203,9 @@ where
     fn attach_return_shared_box(
         self: Box<Self>,
         mut observer: ObserverBox<Self::T, Self::E, Self::W, Self::U>,
-    ) -> Attached<SharedObservableBox<Self::T, Self::E, Self::W, Self::U>> {
+    ) -> AttachedObservable<SharedObservableBox<Self::T, Self::E, Self::W, Self::U>> {
         let _ = (*observer).set_live(Some(Ok((*self).clone())));
-        Attached::new(|| SharedObservableBox::new(*self))
+        AttachedObservable::new(|| SharedObservableBox::new(*self))
     }
 
     fn clone_box(&self) -> SharedObservableBox<Self::T, Self::E, Self::W, Self::U> {
