@@ -27,7 +27,7 @@ where
     fn attach_return<P>(self, observer: P) -> Attached<Self>
     where
         Self: Sized,
-        P: Observer<Self::T, Self::E, Self::W, Self::U> + 'static;
+        P: Observer<Self::T, Self::E, Self::W, Self::U>;
 
     /// Object-safe variant of `Observable::attach_return`.
     #[must_use]
@@ -40,7 +40,7 @@ where
     fn attach<P>(self, observer: P) -> Attached<()>
     where
         Self: Sized,
-        P: Observer<Self::T, Self::E, Self::W, Self::U> + 'static,
+        P: Observer<Self::T, Self::E, Self::W, Self::U>,
     {
         self.attach_return(observer).map(|_| {})
     }
@@ -164,7 +164,7 @@ where
     fn attach_return<P>(self, observer: P) -> Attached<Self>
     where
         Self: Sized,
-        P: Observer<Self::T, Self::E, Self::W, Self::U> + 'static,
+        P: Observer<Self::T, Self::E, Self::W, Self::U>,
     {
         self.0.attach_return_shared_box(Box::new(observer))
     }
@@ -179,7 +179,7 @@ where
     fn attach<P>(self, observer: P) -> Attached<()>
     where
         Self: Sized,
-        P: Observer<Self::T, Self::E, Self::W, Self::U> + 'static,
+        P: Observer<Self::T, Self::E, Self::W, Self::U>,
     {
         self.0.attach_box(Box::new(observer))
     }
@@ -270,13 +270,13 @@ pub trait EvalUpdate<T> {
     fn attach_eval_return<O, R>(observable: O, observer: R) -> Attached<O>
     where
         O: Observable<T = T, U = Self>,
-        R: Observer<O::T, O::E, O::W, !> + 'static;
+        R: Observer<O::T, O::E, O::W, !>;
 
     #[must_use]
     fn attach_eval<O, R>(observable: O, observer: R) -> Attached<()>
     where
         O: Observable<T = T, U = Self>,
-        R: Observer<O::T, O::E, O::W, !> + 'static;
+        R: Observer<O::T, O::E, O::W, !>;
 }
 
 pub trait EvalUpdateMarker {}
@@ -289,7 +289,7 @@ where
     fn attach_eval_return<O, R>(observable: O, observer: R) -> Attached<O>
     where
         O: Observable<T = T, U = Self>,
-        R: Observer<O::T, O::E, O::W, !> + 'static,
+        R: Observer<O::T, O::E, O::W, !>,
     {
         observable.attach_return(self::eval::EvalObserver::<O, R>::new(observer))
     }
@@ -297,7 +297,7 @@ where
     fn attach_eval<O, R>(observable: O, observer: R) -> Attached<()>
     where
         O: Observable<T = T, U = Self>,
-        R: Observer<O::T, O::E, O::W, !> + 'static,
+        R: Observer<O::T, O::E, O::W, !>,
     {
         observable.attach(self::eval::EvalObserver::<O, R>::new(observer))
     }
@@ -307,7 +307,7 @@ impl<T> EvalUpdate<T> for ! {
     fn attach_eval_return<O, R>(observable: O, observer: R) -> Attached<O>
     where
         O: Observable<T = T, U = Self>,
-        R: Observer<O::T, O::E, O::W, !> + 'static,
+        R: Observer<O::T, O::E, O::W, !>,
     {
         observable.attach_return(observer)
     }
@@ -315,7 +315,7 @@ impl<T> EvalUpdate<T> for ! {
     fn attach_eval<O, R>(observable: O, observer: R) -> Attached<()>
     where
         O: Observable<T = T, U = Self>,
-        R: Observer<O::T, O::E, O::W, !> + 'static,
+        R: Observer<O::T, O::E, O::W, !>,
     {
         observable.attach(observer)
     }
@@ -612,7 +612,7 @@ mod eval {
         type U = !;
         fn attach_return<P>(self, observer: P) -> Attached<Self>
         where
-            P: Observer<Self::T, Self::E, Self::W, !> + 'static,
+            P: Observer<Self::T, Self::E, Self::W, !>,
         {
             let attached = O::U::attach_eval_return(self.0, observer);
             attached.map(|observable| Eval(observable))
@@ -627,7 +627,7 @@ mod eval {
 
         fn attach<P>(self, observer: P) -> Attached<()>
         where
-            P: Observer<Self::T, Self::E, Self::W, !> + 'static,
+            P: Observer<Self::T, Self::E, Self::W, !>,
         {
             O::U::attach_eval(self.0, observer)
         }
@@ -795,10 +795,7 @@ mod map {
         type E = O::E;
         type W = O::W;
 
-        fn attach_return<P: Observer<A, O::E, O::W, !> + 'static>(
-            self,
-            observer: P,
-        ) -> Attached<Self> {
+        fn attach_return<P: Observer<A, O::E, O::W, !>>(self, observer: P) -> Attached<Self> {
             let f = self.f;
             let attached = self.observable.eval().attach_return(MapObserver {
                 f: f.clone(),
@@ -815,7 +812,7 @@ mod map {
             self.attach_return(observer).map(ObservableBox::new)
         }
 
-        fn attach<P: Observer<A, O::E, O::W, !> + 'static>(self, observer: P) -> Attached<()> {
+        fn attach<P: Observer<A, O::E, O::W, !>>(self, observer: P) -> Attached<()> {
             self.observable.eval().attach(MapObserver {
                 f: self.f,
                 next: observer,
@@ -901,7 +898,7 @@ mod map_items {
 
         fn attach_return<P>(self, observer: P) -> Attached<Self>
         where
-            P: Observer<Self::T, Self::E, Self::W, Self::U> + 'static,
+            P: Observer<Self::T, Self::E, Self::W, Self::U>,
         {
             todo!()
         }
@@ -915,7 +912,7 @@ mod map_items {
 
         fn attach<P>(self, observer: P) -> Attached<()>
         where
-            P: Observer<Self::T, Self::E, Self::W, Self::U> + 'static,
+            P: Observer<Self::T, Self::E, Self::W, Self::U>,
         {
             todo!()
         }
@@ -1005,10 +1002,7 @@ mod share {
         type W = O::W;
         type U = O::U;
 
-        fn attach_return<P: Observer<O::T, O::E, O::W, O::U> + 'static>(
-            self,
-            observer: P,
-        ) -> Attached<Self> {
+        fn attach_return<P: Observer<O::T, O::E, O::W, O::U>>(self, observer: P) -> Attached<Self> {
             let mut observer = observer;
             let mut state = self.state.lock().unwrap();
             let observer_id = match &mut *state {
