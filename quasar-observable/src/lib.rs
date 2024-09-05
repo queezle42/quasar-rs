@@ -71,10 +71,11 @@ where
         self::retrieve::retrieve(self)
     }
 
-    fn map<F, A>(self, f: F) -> self::map::Map<Self, F, A>
+    fn map<F, A>(self, f: F) -> impl Observable<T = A, E = Self::E, W = Self::W, U = !>
     where
         Self: Sized,
-        F: Fn(Self::T) -> A + Send + Sync,
+        A: Send + Clone + 'static,
+        F: Fn(Self::T) -> A + Send + Sync + 'static,
     {
         self::map::Map::new(self, f)
     }
