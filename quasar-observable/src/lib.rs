@@ -12,6 +12,8 @@ use std::ops::FnOnce;
 use std::sync::Arc;
 use std::sync::Mutex;
 
+pub mod pure;
+
 pub trait Observable
 where
     Self: 'static,
