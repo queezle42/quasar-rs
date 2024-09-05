@@ -24,35 +24,17 @@ where
     type U: Update<Self::T> + Send = !;
 
     #[must_use]
-    fn attach_return<P>(self, observer: P) -> AttachedObservable<Self>
+    fn attach<P>(self, observer: P) -> AttachedObservable
     where
         Self: Sized,
         P: Observer<Self::T, Self::E, Self::W, Self::U>;
-
-    /// Object-safe variant of `Observable::attach_return`.
-    #[must_use]
-    fn attach_return_box(
-        self: Box<Self>,
-        observer: ObserverBox<Self::T, Self::E, Self::W, Self::U>,
-    ) -> AttachedObservable<ObservableBox<Self::T, Self::E, Self::W, Self::U>>;
-
-    #[must_use]
-    fn attach<P>(self, observer: P) -> AttachedObservable<()>
-    where
-        Self: Sized,
-        P: Observer<Self::T, Self::E, Self::W, Self::U>,
-    {
-        self.attach_return(observer).map(|_| {})
-    }
 
     /// Object-safe variant of `Observable::attach`.
     #[must_use]
     fn attach_box(
         self: Box<Self>,
         observer: ObserverBox<Self::T, Self::E, Self::W, Self::U>,
-    ) -> AttachedObservable<()> {
-        self.attach_return_box(observer).map(|_| {})
-    }
+    ) -> AttachedObservable;
 
     fn share(self) -> impl SharedObservable<T = Self::T, E = Self::E, W = Self::W, U = Self::U>
     where
@@ -103,13 +85,6 @@ where
 }
 
 pub trait SharedObservable: Observable + Send {
-    /// Object-safe variant of `Observable::attach_return`.
-    #[must_use]
-    fn attach_return_shared_box(
-        self: Box<Self>,
-        observer: ObserverBox<Self::T, Self::E, Self::W, Self::U>,
-    ) -> AttachedObservable<SharedObservableBox<Self::T, Self::E, Self::W, Self::U>>;
-
     // Object-safe variant of `clone()`
     fn clone_box(&self) -> SharedObservableBox<Self::T, Self::E, Self::W, Self::U>;
 }
@@ -155,34 +130,19 @@ where
     type W = W;
     type U = U;
 
-    fn attach_box(
-        self: Box<Self>,
-        observer: ObserverBox<Self::T, Self::E, Self::W, Self::U>,
-    ) -> AttachedObservable<()> {
-        self.0.attach_box(observer)
-    }
-
-    fn attach_return<P>(self, observer: P) -> AttachedObservable<Self>
-    where
-        Self: Sized,
-        P: Observer<Self::T, Self::E, Self::W, Self::U>,
-    {
-        self.0.attach_return_shared_box(Box::new(observer))
-    }
-
-    fn attach_return_box(
-        self: Box<Self>,
-        observer: ObserverBox<T, E, W, U>,
-    ) -> AttachedObservable<ObservableBox<T, E, W, U>> {
-        todo!()
-    }
-
-    fn attach<P>(self, observer: P) -> AttachedObservable<()>
+    fn attach<P>(self, observer: P) -> AttachedObservable
     where
         Self: Sized,
         P: Observer<Self::T, Self::E, Self::W, Self::U>,
     {
         self.0.attach_box(Box::new(observer))
+    }
+
+    fn attach_box(
+        self: Box<Self>,
+        observer: ObserverBox<Self::T, Self::E, Self::W, Self::U>,
+    ) -> AttachedObservable {
+        self.0.attach_box(observer)
     }
 }
 
@@ -193,13 +153,6 @@ where
     W: Send + 'static,
     U: Update<T> + Send + 'static,
 {
-    fn attach_return_shared_box(
-        self: Box<Self>,
-        observer: ObserverBox<Self::T, Self::E, Self::W, Self::U>,
-    ) -> AttachedObservable<SharedObservableBox<Self::T, Self::E, Self::W, Self::U>> {
-        todo!()
-    }
-
     fn clone_box(&self) -> SharedObservableBox<Self::T, Self::E, Self::W, Self::U> {
         self.0.clone_box()
     }
@@ -210,47 +163,35 @@ pub enum Selector {
     None,
 }
 
-pub struct AttachedObservable<R> {
-    detach: Option<Box<dyn FnOnce() -> R + Send>>,
+pub struct AttachedObservable {
+    detach: Box<dyn FnOnce() + Send>,
     configure: Box<dyn FnMut(Selector) + Send>,
 }
 
-impl<R> Drop for AttachedObservable<R> {
+impl Drop for AttachedObservable {
     fn drop(&mut self) {
-        if let Some(detach) = std::mem::take(&mut self.detach) {
-            let _ = detach();
-        }
+        let detach = std::mem::replace(&mut self.detach, Box::new(|| ()));
+        detach();
     }
 }
 
-impl<R> AttachedObservable<R> {
+impl AttachedObservable {
     pub fn new(
-        detach: impl FnOnce() -> R + Send + 'static,
+        detach: impl FnOnce() + Send + 'static,
         configure: impl FnMut(Selector) + Send + 'static,
     ) -> Self {
         AttachedObservable {
-            detach: Some(Box::new(detach)),
+            detach: Box::new(detach),
             configure: Box::new(configure),
         }
     }
 
-    pub fn detach(mut self) -> R {
-        let detach = std::mem::take(&mut self.detach).unwrap();
-        detach()
+    pub fn detach(self) {
+        drop(self)
     }
 
     pub fn configure(&mut self, selector: Selector) {
         (self.configure)(selector)
-    }
-
-    pub fn map<F, A>(mut self, f: F) -> AttachedObservable<A>
-    where
-        R: 'static,
-        F: (FnOnce(R) -> A) + Send + 'static,
-    {
-        let detach = std::mem::take(&mut self.detach).unwrap();
-        let configure = std::mem::replace(&mut self.configure, Box::new(|_| ()));
-        AttachedObservable::new(|| f(detach()), configure)
     }
 }
 
@@ -278,13 +219,7 @@ impl<T> Update<T> for ! {
 
 pub trait EvalUpdate<T> {
     #[must_use]
-    fn attach_eval_return<O, R>(observable: O, observer: R) -> AttachedObservable<O>
-    where
-        O: Observable<T = T, U = Self>,
-        R: Observer<O::T, O::E, O::W, !>;
-
-    #[must_use]
-    fn attach_eval<O, R>(observable: O, observer: R) -> AttachedObservable<()>
+    fn attach_eval<O, R>(observable: O, observer: R) -> AttachedObservable
     where
         O: Observable<T = T, U = Self>,
         R: Observer<O::T, O::E, O::W, !>;
@@ -297,15 +232,7 @@ where
     U: EvalUpdateMarker,
     T: Send + Clone,
 {
-    fn attach_eval_return<O, R>(observable: O, observer: R) -> AttachedObservable<O>
-    where
-        O: Observable<T = T, U = Self>,
-        R: Observer<O::T, O::E, O::W, !>,
-    {
-        observable.attach_return(self::eval::EvalObserver::<O, R>::new(observer))
-    }
-
-    fn attach_eval<O, R>(observable: O, observer: R) -> AttachedObservable<()>
+    fn attach_eval<O, R>(observable: O, observer: R) -> AttachedObservable
     where
         O: Observable<T = T, U = Self>,
         R: Observer<O::T, O::E, O::W, !>,
@@ -315,15 +242,7 @@ where
 }
 
 impl<T> EvalUpdate<T> for ! {
-    fn attach_eval_return<O, R>(observable: O, observer: R) -> AttachedObservable<O>
-    where
-        O: Observable<T = T, U = Self>,
-        R: Observer<O::T, O::E, O::W, !>,
-    {
-        observable.attach_return(observer)
-    }
-
-    fn attach_eval<O, R>(observable: O, observer: R) -> AttachedObservable<()>
+    fn attach_eval<O, R>(observable: O, observer: R) -> AttachedObservable
     where
         O: Observable<T = T, U = Self>,
         R: Observer<O::T, O::E, O::W, !>,
@@ -621,26 +540,19 @@ mod eval {
         type E = O::E;
         type W = O::W;
         type U = !;
-        fn attach_return<P>(self, observer: P) -> AttachedObservable<Self>
-        where
-            P: Observer<Self::T, Self::E, Self::W, !>,
-        {
-            let attached = O::U::attach_eval_return(self.0, observer);
-            attached.map(|observable| Eval(observable))
-        }
 
-        fn attach_return_box(
-            self: Box<Self>,
-            observer: ObserverBox<Self::T, Self::E, Self::W, Self::U>,
-        ) -> AttachedObservable<ObservableBox<Self::T, Self::E, Self::W, !>> {
-            self.attach_return(observer).map(ObservableBox::new)
-        }
-
-        fn attach<P>(self, observer: P) -> AttachedObservable<()>
+        fn attach<P>(self, observer: P) -> AttachedObservable
         where
             P: Observer<Self::T, Self::E, Self::W, !>,
         {
             O::U::attach_eval(self.0, observer)
+        }
+
+        fn attach_box(
+            self: Box<Self>,
+            observer: ObserverBox<Self::T, Self::E, Self::W, Self::U>,
+        ) -> AttachedObservable {
+            self.attach(observer)
         }
     }
 
@@ -806,27 +718,7 @@ mod map {
         type E = O::E;
         type W = O::W;
 
-        fn attach_return<P: Observer<A, O::E, O::W, !>>(
-            self,
-            observer: P,
-        ) -> AttachedObservable<Self> {
-            let f = self.f;
-            let attached = self.observable.eval().attach_return(MapObserver {
-                f: f.clone(),
-                next: observer,
-                phantom: PhantomData,
-            });
-            attached.map(|super::eval::Eval(observable)| Map { observable, f })
-        }
-
-        fn attach_return_box(
-            self: Box<Self>,
-            observer: ObserverBox<Self::T, Self::E, Self::W, Self::U>,
-        ) -> AttachedObservable<ObservableBox<Self::T, Self::E, Self::W, Self::U>> {
-            self.attach_return(observer).map(ObservableBox::new)
-        }
-
-        fn attach<P: Observer<A, O::E, O::W, !>>(self, observer: P) -> AttachedObservable<()> {
+        fn attach<P: Observer<A, O::E, O::W, !>>(self, observer: P) -> AttachedObservable {
             self.observable.eval().attach(MapObserver {
                 f: self.f,
                 next: observer,
@@ -837,7 +729,7 @@ mod map {
         fn attach_box(
             self: Box<Self>,
             observer: ObserverBox<Self::T, Self::E, Self::W, Self::U>,
-        ) -> AttachedObservable<()> {
+        ) -> AttachedObservable {
             self.attach(observer)
         }
     }
@@ -910,21 +802,7 @@ mod map_items {
         type W = O::W;
         type U = <O::U as ContainerUpdate<O::T>>::U<A>;
 
-        fn attach_return<P>(self, observer: P) -> AttachedObservable<Self>
-        where
-            P: Observer<Self::T, Self::E, Self::W, Self::U>,
-        {
-            todo!()
-        }
-
-        fn attach_return_box(
-            self: Box<Self>,
-            observer: ObserverBox<Self::T, Self::E, Self::W, Self::U>,
-        ) -> AttachedObservable<ObservableBox<Self::T, Self::E, Self::W, Self::U>> {
-            todo!()
-        }
-
-        fn attach<P>(self, observer: P) -> AttachedObservable<()>
+        fn attach<P>(self, observer: P) -> AttachedObservable
         where
             P: Observer<Self::T, Self::E, Self::W, Self::U>,
         {
@@ -934,7 +812,7 @@ mod map_items {
         fn attach_box(
             self: Box<Self>,
             observer: ObserverBox<Self::T, Self::E, Self::W, Self::U>,
-        ) -> AttachedObservable<()> {
+        ) -> AttachedObservable {
             todo!()
         }
     }
@@ -986,7 +864,7 @@ mod share {
     where
         O: Observable,
     {
-        attached: AttachedObservable<O>,
+        attached: AttachedObservable,
         next_observer_id: u64,
         // TODO DynObserver / ObserverBox / ObserverObject
         observers: BTreeMap<u64, ObserverBox<O::T, O::E, O::W, O::U>>,
@@ -1016,10 +894,7 @@ mod share {
         type W = O::W;
         type U = O::U;
 
-        fn attach_return<P: Observer<O::T, O::E, O::W, O::U>>(
-            self,
-            observer: P,
-        ) -> AttachedObservable<Self> {
+        fn attach<P: Observer<O::T, O::E, O::W, O::U>>(self, observer: P) -> AttachedObservable {
             let mut observer = observer;
             let mut state = self.state.lock().unwrap();
             let observer_id = match &mut *state {
@@ -1029,7 +904,7 @@ mod share {
                     let mut observers: BTreeMap<u64, ObserverBox<O::T, O::E, O::W, O::U>> =
                         BTreeMap::new();
                     observers.insert(0, Box::new(observer));
-                    let attached = observable.attach_return(ShareObserver(self.clone()));
+                    let attached = observable.attach(ShareObserver(self.clone()));
                     *state = State::Attached(AttachedState {
                         attached,
                         next_observer_id: 1,
@@ -1066,45 +941,26 @@ mod share {
                 move || {
                     let mut state = self.state.lock().unwrap();
 
-                    let observer = match &mut *state {
+                    match &mut *state {
                         State::Detached(_observable) => unreachable!(),
                         State::Attached(attached) => {
-                            let observer_box = attached.observers.remove(&observer_id).unwrap();
-                            let observer_box =
-                                (observer_box as Box<dyn Any>).downcast::<P>().unwrap();
-                            let observer = *observer_box;
+                            attached.observers.remove(&observer_id);
+
                             if attached.observers.is_empty() {
-                                if let State::Attached(attached) =
-                                    std::mem::replace(&mut *state, State::Detached(None))
-                                {
-                                    let observable = attached.attached.detach();
-                                    *state = State::Detached(Some(observable));
-                                } else {
-                                    unreachable!()
-                                }
+                                todo!("flow control")
                             }
-                            observer
                         }
                     };
                     drop(state);
-
-                    self
                 },
                 |_selector| todo!(),
             )
         }
 
-        fn attach_return_box(
-            self: Box<Self>,
-            observer: ObserverBox<Self::T, Self::E, Self::W, Self::U>,
-        ) -> AttachedObservable<ObservableBox<Self::T, Self::E, Self::W, Self::U>> {
-            self.attach_return(observer).map(ObservableBox::new)
-        }
-
         fn attach_box(
             self: Box<Self>,
             observer: ObserverBox<Self::T, Self::E, Self::W, Self::U>,
-        ) -> AttachedObservable<()> {
+        ) -> AttachedObservable {
             self.attach(observer)
         }
     }
@@ -1116,13 +972,6 @@ mod share {
         O::E: Clone,
         O::W: Clone,
     {
-        fn attach_return_shared_box(
-            self: Box<Self>,
-            observer: ObserverBox<Self::T, Self::E, Self::W, Self::U>,
-        ) -> AttachedObservable<SharedObservableBox<Self::T, Self::E, Self::W, Self::U>> {
-            self.attach_return(observer).map(SharedObservableBox::new)
-        }
-
         fn clone_box(&self) -> SharedObservableBox<Self::T, Self::E, Self::W, Self::U> {
             SharedObservableBox::new(self.clone())
         }

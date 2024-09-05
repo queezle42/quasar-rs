@@ -1,35 +1,18 @@
 use super::*;
 
 #[derive(Clone)]
-struct Pure<T>(T)
-where
-    T: Clone;
+struct Pure<T>(T);
 
 impl<T> Observable for Pure<T>
 where
-    T: Send + Clone + 'static,
+    T: Send + 'static,
 {
     type T = T;
     type E = !;
     type W = !;
     type U = !;
 
-    fn attach_return<P>(self, mut observer: P) -> AttachedObservable<Self>
-    where
-        Self: Sized,
-        P: Observer<Self::T, Self::E, Self::W, Self::U> + 'static,
-    {
-        todo!()
-    }
-
-    fn attach_return_box(
-        self: Box<Self>,
-        mut observer: ObserverBox<Self::T, Self::E, Self::W, Self::U>,
-    ) -> AttachedObservable<ObservableBox<Self::T, Self::E, Self::W, Self::U>> {
-        todo!()
-    }
-
-    fn attach<P>(self, mut observer: P) -> AttachedObservable<()>
+    fn attach<P>(self, mut observer: P) -> AttachedObservable
     where
         Self: Sized,
         P: Observer<Self::T, Self::E, Self::W, Self::U> + 'static,
@@ -41,7 +24,7 @@ where
     fn attach_box(
         self: Box<Self>,
         mut observer: ObserverBox<Self::T, Self::E, Self::W, Self::U>,
-    ) -> AttachedObservable<()> {
+    ) -> AttachedObservable {
         let _ = (*observer).set_live(Some(Ok((*self).0)));
         AttachedObservable::new(|| (), |_| ())
     }
@@ -77,13 +60,6 @@ impl<T> SharedObservable for Pure<T>
 where
     T: Send + Clone + 'static,
 {
-    fn attach_return_shared_box(
-        self: Box<Self>,
-        observer: ObserverBox<Self::T, Self::E, Self::W, Self::U>,
-    ) -> AttachedObservable<SharedObservableBox<Self::T, Self::E, Self::W, Self::U>> {
-        self.attach_return(observer).map(SharedObservableBox::new)
-    }
-
     fn clone_box(&self) -> SharedObservableBox<Self::T, Self::E, Self::W, Self::U> {
         SharedObservableBox::new(self.clone())
     }
@@ -128,31 +104,14 @@ where
 
 impl<T> Observable for T
 where
-    T: PureObservable + Clone + 'static,
+    T: PureObservable + 'static,
 {
     type T = T;
     type E = !;
     type W = !;
     type U = !;
 
-    fn attach_return<P>(self, mut observer: P) -> AttachedObservable<Self>
-    where
-        Self: Sized,
-        P: Observer<Self::T, Self::E, Self::W, Self::U> + 'static,
-    {
-        let _ = observer.set_live(Some(Ok(self.clone())));
-        AttachedObservable::new(|| self, |_| ())
-    }
-
-    fn attach_return_box(
-        self: Box<Self>,
-        mut observer: ObserverBox<Self::T, Self::E, Self::W, Self::U>,
-    ) -> AttachedObservable<ObservableBox<Self::T, Self::E, Self::W, Self::U>> {
-        let _ = (*observer).set_live(Some(Ok((*self).clone())));
-        AttachedObservable::new(|| ObservableBox::new(*self), |_| ())
-    }
-
-    fn attach<P>(self, mut observer: P) -> AttachedObservable<()>
+    fn attach<P>(self, mut observer: P) -> AttachedObservable
     where
         Self: Sized,
         P: Observer<Self::T, Self::E, Self::W, Self::U> + 'static,
@@ -164,7 +123,7 @@ where
     fn attach_box(
         self: Box<Self>,
         mut observer: ObserverBox<Self::T, Self::E, Self::W, Self::U>,
-    ) -> AttachedObservable<()> {
+    ) -> AttachedObservable {
         let _ = (*observer).set_live(Some(Ok(*self)));
         AttachedObservable::new(|| (), |_| ())
     }
@@ -200,14 +159,6 @@ impl<T> SharedObservable for T
 where
     T: PureObservable + Clone + 'static,
 {
-    fn attach_return_shared_box(
-        self: Box<Self>,
-        mut observer: ObserverBox<Self::T, Self::E, Self::W, Self::U>,
-    ) -> AttachedObservable<SharedObservableBox<Self::T, Self::E, Self::W, Self::U>> {
-        let _ = (*observer).set_live(Some(Ok((*self).clone())));
-        AttachedObservable::new(|| SharedObservableBox::new(*self), |_| ())
-    }
-
     fn clone_box(&self) -> SharedObservableBox<Self::T, Self::E, Self::W, Self::U> {
         SharedObservableBox::new(self.clone())
     }
