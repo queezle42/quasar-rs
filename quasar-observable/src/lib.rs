@@ -205,24 +205,28 @@ where
     }
 }
 
-pub struct AttachedObservable<R>(Option<Box<dyn FnOnce() -> R + Send>>);
+pub struct AttachedObservable<R> {
+    detach: Option<Box<dyn FnOnce() -> R + Send>>,
+}
 
 impl<R> Drop for AttachedObservable<R> {
     fn drop(&mut self) {
-        if let Some(f) = std::mem::take(&mut self.0) {
-            let _ = f();
+        if let Some(detach) = std::mem::take(&mut self.detach) {
+            let _ = detach();
         }
     }
 }
 
 impl<R> AttachedObservable<R> {
-    pub fn new(f: impl FnOnce() -> R + Send + 'static) -> Self {
-        AttachedObservable(Some(Box::new(f)))
+    pub fn new(detach: impl FnOnce() -> R + Send + 'static) -> Self {
+        AttachedObservable {
+            detach: Some(Box::new(detach)),
+        }
     }
 
     pub fn detach(mut self) -> R {
-        let f = std::mem::take(&mut self.0).unwrap();
-        f()
+        let detach = std::mem::take(&mut self.detach).unwrap();
+        detach()
     }
 
     pub fn map<F, A>(mut self, f: F) -> AttachedObservable<A>
@@ -230,7 +234,7 @@ impl<R> AttachedObservable<R> {
         R: 'static,
         F: (FnOnce(R) -> A) + Send + 'static,
     {
-        let detach = std::mem::take(&mut self.0).unwrap();
+        let detach = std::mem::take(&mut self.detach).unwrap();
         AttachedObservable::new(|| f(detach()))
     }
 }
