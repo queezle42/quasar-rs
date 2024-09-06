@@ -158,9 +158,22 @@ where
     }
 }
 
+#[derive(Clone)]
 pub enum Selector {
     All,
-    None,
+    Nothing,
+}
+
+impl Selector {
+    fn combine(selectors: impl Iterator<Item = Selector>) -> Selector {
+        for selector in selectors {
+            match selector {
+                Selector::All => return Selector::All,
+                Selector::Nothing => (),
+            }
+        }
+        Selector::Nothing
+    }
 }
 
 pub struct AttachedObservable {
