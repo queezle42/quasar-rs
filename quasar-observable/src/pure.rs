@@ -12,7 +12,7 @@ where
     type W = !;
     type U = !;
 
-    fn attach<P>(self, mut observer: P) -> AttachedObservable
+    fn attach<P>(self, mut observer: P, _selector: Selector) -> AttachedObservable
     where
         Self: Sized,
         P: Observer<Self::T, Self::E, Self::W, Self::U> + 'static,
@@ -24,6 +24,7 @@ where
     fn attach_box(
         self: Box<Self>,
         mut observer: ObserverBox<Self::T, Self::E, Self::W, Self::U>,
+        _selector: Selector,
     ) -> AttachedObservable {
         let _ = (*observer).set_live(Some(Ok((*self).0)));
         AttachedObservable::new(|| (), |_| ())
@@ -113,7 +114,7 @@ where
     type W = !;
     type U = !;
 
-    fn attach<P>(self, mut observer: P) -> AttachedObservable
+    fn attach<P>(self, mut observer: P, _selector: Selector) -> AttachedObservable
     where
         Self: Sized,
         P: Observer<Self::T, Self::E, Self::W, Self::U> + 'static,
@@ -125,6 +126,7 @@ where
     fn attach_box(
         self: Box<Self>,
         mut observer: ObserverBox<Self::T, Self::E, Self::W, Self::U>,
+        _selector: Selector,
     ) -> AttachedObservable {
         let _ = (*observer).set_live(Some(Ok(*self)));
         AttachedObservable::new(|| (), |_| ())

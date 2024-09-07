@@ -2,7 +2,6 @@
 #![feature(never_type)]
 #![feature(trait_upcasting)]
 
-use std::any::Any;
 use std::boxed::Box;
 use std::collections::BTreeMap;
 use std::future::Future;
@@ -14,17 +13,16 @@ use std::sync::Mutex;
 
 pub mod pure;
 
-pub trait Observable
-where
-    Self: 'static,
-{
+mod share;
+
+pub trait Observable: 'static {
     type T: Send;
     type E: Send;
     type W: Send = !;
     type U: Update<Self::T> + Send = !;
 
     #[must_use]
-    fn attach<P>(self, observer: P) -> AttachedObservable
+    fn attach<P>(self, observer: P, selector: Selector) -> AttachedObservable
     where
         Self: Sized,
         P: Observer<Self::T, Self::E, Self::W, Self::U>;
@@ -34,6 +32,7 @@ where
     fn attach_box(
         self: Box<Self>,
         observer: ObserverBox<Self::T, Self::E, Self::W, Self::U>,
+        initial_selector: Selector,
     ) -> AttachedObservable;
 
     fn share(self) -> impl SharedObservable<T = Self::T, E = Self::E, W = Self::W, U = Self::U>
@@ -43,7 +42,7 @@ where
         Self::E: Clone,
         Self::W: Clone,
     {
-        Arc::new(share::Share::new(self))
+        share::Share::new(self)
     }
 
     fn retrieve(self) -> impl Future<Output = Result<Self::T, Self::E>> + Send
@@ -130,19 +129,20 @@ where
     type W = W;
     type U = U;
 
-    fn attach<P>(self, observer: P) -> AttachedObservable
+    fn attach<P>(self, observer: P, selector: Selector) -> AttachedObservable
     where
         Self: Sized,
         P: Observer<Self::T, Self::E, Self::W, Self::U>,
     {
-        self.0.attach_box(Box::new(observer))
+        self.0.attach_box(Box::new(observer), selector)
     }
 
     fn attach_box(
         self: Box<Self>,
         observer: ObserverBox<Self::T, Self::E, Self::W, Self::U>,
+        selector: Selector,
     ) -> AttachedObservable {
-        self.0.attach_box(observer)
+        self.0.attach_box(observer, selector)
     }
 }
 
@@ -158,10 +158,11 @@ where
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Default)]
 pub enum Selector {
-    All,
+    #[default]
     Nothing,
+    All,
 }
 
 impl Selector {
@@ -232,7 +233,7 @@ impl<T> Update<T> for ! {
 
 pub trait EvalUpdate<T> {
     #[must_use]
-    fn attach_eval<O, R>(observable: O, observer: R) -> AttachedObservable
+    fn attach_eval<O, R>(observable: O, observer: R, selector: Selector) -> AttachedObservable
     where
         O: Observable<T = T, U = Self>,
         R: Observer<O::T, O::E, O::W, !>;
@@ -245,22 +246,22 @@ where
     U: EvalUpdateMarker,
     T: Send + Clone,
 {
-    fn attach_eval<O, R>(observable: O, observer: R) -> AttachedObservable
+    fn attach_eval<O, R>(observable: O, observer: R, selector: Selector) -> AttachedObservable
     where
         O: Observable<T = T, U = Self>,
         R: Observer<O::T, O::E, O::W, !>,
     {
-        observable.attach(self::eval::EvalObserver::<O, R>::new(observer))
+        observable.attach(self::eval::EvalObserver::<O, R>::new(observer), selector)
     }
 }
 
 impl<T> EvalUpdate<T> for ! {
-    fn attach_eval<O, R>(observable: O, observer: R) -> AttachedObservable
+    fn attach_eval<O, R>(observable: O, observer: R, selector: Selector) -> AttachedObservable
     where
         O: Observable<T = T, U = Self>,
         R: Observer<O::T, O::E, O::W, !>,
     {
-        observable.attach(observer)
+        observable.attach(observer, selector)
     }
 }
 
@@ -341,7 +342,7 @@ where
     }
 }
 
-pub trait Observer<T, E, W, U>: Any + Send
+pub trait Observer<T, E, W, U>: Send + 'static
 where
     U: Update<T>,
 {
@@ -349,6 +350,9 @@ where
     fn set_waiting(&mut self, clear_cache: bool, marker: W);
     fn set_live(&mut self, content: Option<Result<T, E>>) -> Box<dyn Future<Output = ()> + Sync>;
     fn update(&mut self, update: U) -> Box<dyn Future<Output = ()> + Sync>;
+
+    fn done(self: Box<Self>) {}
+
     fn into_box(self) -> Box<dyn Observer<T, E, W, U>>
     where
         Self: Sized,
@@ -380,6 +384,10 @@ where
 
     fn update(&mut self, update: U) -> Box<dyn Future<Output = ()> + Sync> {
         (**self).update(update)
+    }
+
+    fn done(self: Box<Self>) {
+        (*self).done()
     }
 
     fn into_box(self) -> Box<dyn Observer<T, E, W, U>> {
@@ -564,18 +572,19 @@ mod eval {
         type W = O::W;
         type U = !;
 
-        fn attach<P>(self, observer: P) -> AttachedObservable
+        fn attach<P>(self, observer: P, selector: Selector) -> AttachedObservable
         where
             P: Observer<Self::T, Self::E, Self::W, !>,
         {
-            O::U::attach_eval(self.0, observer)
+            O::U::attach_eval(self.0, observer, selector)
         }
 
         fn attach_box(
             self: Box<Self>,
             observer: ObserverBox<Self::T, Self::E, Self::W, Self::U>,
+            selector: Selector,
         ) -> AttachedObservable {
-            self.attach(observer)
+            self.attach(observer, selector)
         }
     }
 
@@ -660,11 +669,15 @@ mod retrieve {
         O: Observable,
     {
         let (tx, rx) = tokio::sync::oneshot::channel();
+
         let retrieve_observer = Retrieve::<O> { tx: Some(tx) };
-        let attached = observable.eval().attach(retrieve_observer);
+        let attached = observable.eval().attach(retrieve_observer, Selector::All);
 
         async {
             let result = rx.await;
+
+            // explicitly move attached observable into the async block (or it
+            // would be dropped on the first `await`)
             drop(attached);
 
             match result {
@@ -741,19 +754,27 @@ mod map {
         type E = O::E;
         type W = O::W;
 
-        fn attach<P: Observer<A, O::E, O::W, !>>(self, observer: P) -> AttachedObservable {
-            self.observable.eval().attach(MapObserver {
-                f: self.f,
-                next: observer,
-                phantom: PhantomData,
-            })
+        fn attach<P: Observer<A, O::E, O::W, !>>(
+            self,
+            observer: P,
+            selector: Selector,
+        ) -> AttachedObservable {
+            self.observable.eval().attach(
+                MapObserver {
+                    f: self.f,
+                    next: observer,
+                    phantom: PhantomData,
+                },
+                selector,
+            )
         }
 
         fn attach_box(
             self: Box<Self>,
             observer: ObserverBox<Self::T, Self::E, Self::W, Self::U>,
+            selector: Selector,
         ) -> AttachedObservable {
-            self.attach(observer)
+            self.attach(observer, selector)
         }
     }
 
@@ -825,7 +846,7 @@ mod map_items {
         type W = O::W;
         type U = <O::U as ContainerUpdate<O::T>>::U<A>;
 
-        fn attach<P>(self, observer: P) -> AttachedObservable
+        fn attach<P>(self, observer: P, selector: Selector) -> AttachedObservable
         where
             P: Observer<Self::T, Self::E, Self::W, Self::U>,
         {
@@ -835,6 +856,7 @@ mod map_items {
         fn attach_box(
             self: Box<Self>,
             observer: ObserverBox<Self::T, Self::E, Self::W, Self::U>,
+            selector: Selector,
         ) -> AttachedObservable {
             todo!()
         }
@@ -864,169 +886,3 @@ mod map_items {
 //         todo!()
 //     }
 // }
-
-mod share {
-    use super::*;
-
-    pub struct Share<O>
-    where
-        O: Observable,
-    {
-        state: Mutex<State<O>>,
-    }
-
-    enum State<O>
-    where
-        O: Observable,
-    {
-        Detached(Option<O>),
-        Attached(AttachedState<O>),
-    }
-
-    struct AttachedState<O>
-    where
-        O: Observable,
-    {
-        attached: AttachedObservable,
-        next_observer_id: u64,
-        // TODO DynObserver / ObserverBox / ObserverObject
-        observers: BTreeMap<u64, ObserverBox<O::T, O::E, O::W, O::U>>,
-        observer_state: ObserverState<O::T, O::E, O::W>,
-    }
-
-    impl<O> Share<O>
-    where
-        O: Observable,
-    {
-        pub fn new(observable: O) -> Share<O> {
-            Share {
-                state: Mutex::new(State::Detached(Some(observable))),
-            }
-        }
-    }
-
-    impl<O> Observable for Arc<Share<O>>
-    where
-        O: Observable + Send,
-        O::T: Clone,
-        O::E: Clone,
-        O::W: Clone,
-    {
-        type T = O::T;
-        type E = O::E;
-        type W = O::W;
-        type U = O::U;
-
-        fn attach<P: Observer<O::T, O::E, O::W, O::U>>(self, observer: P) -> AttachedObservable {
-            let mut observer = observer;
-            let mut state = self.state.lock().unwrap();
-            let observer_id = match &mut *state {
-                State::Detached(observable) => {
-                    // attach can only happen once so unwrap is ok
-                    let observable = std::mem::take(observable).unwrap();
-                    let mut observers: BTreeMap<u64, ObserverBox<O::T, O::E, O::W, O::U>> =
-                        BTreeMap::new();
-                    observers.insert(0, Box::new(observer));
-                    let attached = observable.attach(ShareObserver(self.clone()));
-                    *state = State::Attached(AttachedState {
-                        attached,
-                        next_observer_id: 1,
-                        observers,
-                        observer_state: ObserverState::new(),
-                    });
-                    0
-                }
-                State::Attached(attached) => {
-                    let observer_id = attached.next_observer_id;
-                    attached.next_observer_id += 1;
-                    match &attached.observer_state {
-                        ObserverState::Changing(None) => (),
-                        ObserverState::Changing(Some(_cache)) => {
-                            todo!("store cache for subscriber")
-                        }
-                        ObserverState::Waiting(None, _marker) => {
-                            todo!("we need to propagate waiting on subscribe")
-                        }
-                        ObserverState::Waiting(Some(_cache), _marker) => {
-                            todo!("we need to propagate waiting on subscribe + store cache for subscriber")
-                        }
-                        ObserverState::Live(content) => {
-                            let _ = observer.set_live(Some(content.clone()));
-                        }
-                    }
-                    attached.observers.insert(observer_id, Box::new(observer));
-                    observer_id
-                }
-            };
-            // release mutex guard to reuse `self`
-            drop(state);
-            AttachedObservable::new(
-                move || {
-                    let mut state = self.state.lock().unwrap();
-
-                    match &mut *state {
-                        State::Detached(_observable) => unreachable!(),
-                        State::Attached(attached) => {
-                            attached.observers.remove(&observer_id);
-
-                            if attached.observers.is_empty() {
-                                todo!("flow control")
-                            }
-                        }
-                    };
-                    drop(state);
-                },
-                |_selector| todo!(),
-            )
-        }
-
-        fn attach_box(
-            self: Box<Self>,
-            observer: ObserverBox<Self::T, Self::E, Self::W, Self::U>,
-        ) -> AttachedObservable {
-            self.attach(observer)
-        }
-    }
-
-    impl<O> SharedObservable for Arc<self::share::Share<O>>
-    where
-        O: Observable + Send,
-        O::T: Clone,
-        O::E: Clone,
-        O::W: Clone,
-    {
-        fn clone_box(&self) -> SharedObservableBox<Self::T, Self::E, Self::W, Self::U> {
-            SharedObservableBox::new(self.clone())
-        }
-    }
-
-    struct ShareObserver<O>(Arc<Share<O>>)
-    where
-        O: Observable;
-
-    impl<O> Observer<O::T, O::E, O::W, O::U> for ShareObserver<O>
-    where
-        O: Observable + Send,
-        O::T: Clone,
-        O::E: Clone,
-        O::W: Clone,
-    {
-        fn set_changing(&mut self, _clear_cache: bool) {
-            let _ = self.0;
-            todo!()
-        }
-        fn set_waiting(&mut self, _clear_cache: bool, _marker: O::W) {
-            let _ = self.0;
-            todo!()
-        }
-        fn set_live(
-            &mut self,
-            _content: Option<Result<O::T, O::E>>,
-        ) -> Box<dyn Future<Output = ()> + Sync> {
-            todo!()
-        }
-        fn update(&mut self, _update: O::U) -> Box<dyn Future<Output = ()> + Sync> {
-            todo!()
-        }
-    }
-}
