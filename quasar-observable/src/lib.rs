@@ -473,6 +473,94 @@ impl<T, E, W> ObserverState<T, E, W> {
     }
 }
 
+mod pending {
+    use super::*;
+
+    enum State {
+        Blocked,
+        Ready,
+    }
+
+    pub enum Pending<T, E, U> {
+        Unchanged(State),
+        Replace(State, Result<T, E>),
+        Update(State, U),
+    }
+
+    impl<T, E, U> Default for Pending<T, E, U> {
+        fn default() -> Self {
+            Pending::Unchanged(State::Blocked)
+        }
+    }
+
+    impl<T, E, U> Pending<T, E, U>
+    where
+        U: Update<T>,
+    {
+        pub fn set_blocked(&mut self, clear_cache: bool) {
+            let this = take(self);
+            if clear_cache {
+                match this {
+                    Pending::Unchanged(_) => {
+                        // already replaced with default by `take`
+                    }
+                    Pending::Replace(_, result) => *self = Pending::Replace(State::Blocked, result),
+                    Pending::Update(_, update) => *self = Pending::Update(State::Blocked, update),
+                }
+            }
+        }
+
+        pub fn set_live(&mut self, content: Option<Result<T, E>>) {
+            *self = if let Some(content) = content {
+                Pending::Replace(State::Ready, content)
+            } else {
+                match take(self) {
+                    Pending::Unchanged(_) => Pending::Unchanged(State::Ready),
+                    Pending::Replace(_, result) => Pending::Replace(State::Ready, result),
+                    Pending::Update(_, update) => Pending::Update(State::Ready, update),
+                }
+            }
+        }
+
+        pub fn update(&mut self, update: U) {
+            *self = match take(self) {
+                Pending::Unchanged(_) => panic!(),
+                Pending::Replace(_, Ok(result)) => {
+                    Pending::Replace(State::Ready, Ok(update.apply_update(result)))
+                }
+                Pending::Replace(_, Err(_)) => panic!(),
+                Pending::Update(_, old_update) => {
+                    Pending::Update(State::Ready, U::merge(old_update, update))
+                }
+            }
+        }
+
+        pub fn is_ready(&self) -> bool {
+            matches!(
+                self,
+                Pending::Unchanged(State::Ready)
+                    | Pending::Replace(State::Ready, _)
+                    | Pending::Update(State::Ready, _)
+            )
+        }
+
+        pub fn apply_to_observer<P, W>(
+            &mut self,
+            observer: &mut P,
+        ) -> Box<dyn Future<Output = ()> + Sync>
+        where
+            P: Observer<T, E, W, U>,
+        {
+            match take(self) {
+                Pending::Unchanged(State::Ready) => observer.set_live(None),
+                Pending::Replace(State::Ready, result) => observer.set_live(Some(result)),
+                Pending::Update(State::Ready, update) => observer.update(update),
+                _ => panic!(),
+            }
+        }
+    }
+}
+
 mod detacher {
     use super::*;
 
