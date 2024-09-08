@@ -5,6 +5,7 @@ use std::boxed::Box;
 use std::collections::BTreeMap;
 use std::future::Future;
 use std::marker::PhantomData;
+use std::mem::{replace, take};
 use std::ops::FnMut;
 use std::ops::FnOnce;
 use std::sync::Arc;
@@ -183,7 +184,7 @@ pub struct AttachedObservable {
 
 impl Drop for AttachedObservable {
     fn drop(&mut self) {
-        let detach = std::mem::replace(&mut self.detach, Box::new(|| ()));
+        let detach = replace(&mut self.detach, Box::new(|| ()));
         detach();
     }
 }
@@ -211,7 +212,7 @@ impl AttachedObservable {
 pub trait Update<T>: EvalUpdate<T> {
     fn apply_update(self, target: T) -> T;
     fn apply_update_mut(self, target: &mut T);
-    fn merge_update(self, next: Self) -> Self;
+    fn merge(prev: Self, next: Self) -> Self;
     fn merge_update_mut(&mut self, next: Self);
 }
 
@@ -222,8 +223,8 @@ impl<T> Update<T> for ! {
     fn apply_update_mut(self, _target: &mut T) {
         match self {}
     }
-    fn merge_update(self, _next: Self) -> Self {
-        match self {}
+    fn merge(prev: Self, _next: Self) -> Self {
+        match prev {}
     }
     fn merge_update_mut(&mut self, _next: Self) {
         match *self {}
@@ -332,7 +333,7 @@ where
         todo!()
     }
 
-    fn merge_update(self, _next: Self) -> Self {
+    fn merge(_prev: Self, _next: Self) -> Self {
         todo!()
     }
 
@@ -498,7 +499,7 @@ mod detacher {
                 Err(arc) => {
                     // normal path: arc is still shared
                     let mut guard = arc.lock().unwrap();
-                    std::mem::take(&mut *guard)
+                    take(&mut *guard)
                 }
                 Ok(mutex) => {
                     // exclusive ownership path
@@ -617,14 +618,14 @@ mod eval {
     {
         fn set_changing(&mut self, clear_cache: bool) {
             if clear_cache {
-                std::mem::take(&mut self.cache);
+                take(&mut self.cache);
             }
             self.observer.set_changing(clear_cache);
         }
 
         fn set_waiting(&mut self, clear_cache: bool, marker: O::W) {
             if clear_cache {
-                std::mem::take(&mut self.cache);
+                take(&mut self.cache);
             }
             self.observer.set_waiting(clear_cache, marker);
         }
@@ -642,7 +643,7 @@ mod eval {
         }
 
         fn update(&mut self, update: O::U) -> Box<dyn Future<Output = ()> + Sync> {
-            let cache = match std::mem::take(&mut self.cache) {
+            let cache = match take(&mut self.cache) {
                 Some(cache) => cache,
                 None => panic!(),
             };
@@ -707,7 +708,7 @@ mod retrieve {
                 None => panic!(),
             };
 
-            let tx = std::mem::take(&mut self.tx);
+            let tx = take(&mut self.tx);
             if let Some(tx) = tx {
                 let _ = tx.send(content);
             }
