@@ -1,6 +1,5 @@
 #![feature(associated_type_defaults)]
 #![feature(never_type)]
-#![feature(trait_upcasting)]
 
 use std::boxed::Box;
 use std::collections::BTreeMap;
