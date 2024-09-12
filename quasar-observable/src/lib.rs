@@ -498,26 +498,27 @@ mod pending {
         U: Update<T>,
     {
         pub fn set_blocked(&mut self, clear_cache: bool) {
-            let this = take(self);
             if clear_cache {
-                match this {
+                match self {
                     Pending::Unchanged(_) => {
                         // already replaced with default by `take`
                     }
-                    Pending::Replace(_, result) => *self = Pending::Replace(State::Blocked, result),
-                    Pending::Update(_, update) => *self = Pending::Update(State::Blocked, update),
+                    Pending::Replace(ready, _) => *ready = State::Blocked,
+                    Pending::Update(ready, _) => *ready = State::Blocked,
                 }
+            } else {
+                *self = Pending::default();
             }
         }
 
         pub fn set_live(&mut self, content: Option<Result<T, E>>) {
-            *self = if let Some(content) = content {
-                Pending::Replace(State::Ready, content)
+            if let Some(content) = content {
+                *self = Pending::Replace(State::Ready, content)
             } else {
-                match take(self) {
-                    Pending::Unchanged(_) => Pending::Unchanged(State::Ready),
-                    Pending::Replace(_, result) => Pending::Replace(State::Ready, result),
-                    Pending::Update(_, update) => Pending::Update(State::Ready, update),
+                match self {
+                    Pending::Unchanged(ready) => *ready = State::Ready,
+                    Pending::Replace(ready, _) => *ready = State::Ready,
+                    Pending::Update(ready, _) => *ready = State::Ready,
                 }
             }
         }
